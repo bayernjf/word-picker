@@ -11,7 +11,7 @@ async function loadSettings() {
     const response = await sendMessage({ type: "GET_SETTINGS" });
     const settings = response.settings || {};
     form.lookupKey.value = settings.lookupKey || "Control";
-    form.hoverDelay.value = settings.hoverDelay || 300;
+    form.hoverDelay.value = settings.hoverDelay || 100;
     form.translator.value = settings.translator || "free";
     form.autoSpeak.checked = Boolean(settings.autoSpeak);
     form.maxCacheSize.value = settings.maxCacheSize || 200;
@@ -25,7 +25,7 @@ async function handleSubmit(event) {
 
   const payload = {
     lookupKey: form.lookupKey.value,
-    hoverDelay: clampNumber(form.hoverDelay.value, 100, 1500, 300),
+    hoverDelay: clampNumber(form.hoverDelay.value, 100, 1500, 100),
     translator: form.translator.value,
     autoSpeak: form.autoSpeak.checked,
     maxCacheSize: clampNumber(form.maxCacheSize.value, 50, 500, 200)

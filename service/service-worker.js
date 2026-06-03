@@ -40,7 +40,7 @@ async function handleMessage(message) {
     case "SAVE_WORD":
       return handleSaveWord(message.entry);
     case "DELETE_WORD":
-      return deleteWordById(message.id);
+      return handleDeleteWord(message.id);
     case "GET_WORDS":
       return { words: await searchWords(message.query || "") };
     case "EXPORT_WORDS":
@@ -77,7 +77,19 @@ async function handleSaveWord(entry) {
     throw new Error("单词内容不能为空");
   }
 
-  return addWord(entry);
+  const result = await addWord(entry);
+  return {
+    saved: Boolean(result.success),
+    duplicate: Boolean(result.duplicate),
+    entry: result.entry
+  };
+}
+
+async function handleDeleteWord(id) {
+  const result = await deleteWordById(id);
+  return {
+    deleted: Boolean(result.success)
+  };
 }
 
 async function handleExportWords(format) {
