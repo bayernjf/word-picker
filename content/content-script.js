@@ -630,14 +630,14 @@
         return;
       }
 
-      if (response.saved && !response.duplicate) {
-        showToast("添加成功");
+      if (response.duplicate) {
+        showToast("已添加");
         safeClosePopupAndReset();
         return;
       }
 
-      if (response.duplicate) {
-        showToast("已添加");
+      if (response.saved) {
+        showToast("添加成功");
         safeClosePopupAndReset();
         return;
       }
@@ -792,6 +792,12 @@
       response = await saveLookupWord(lookup);
     } catch (error) {
       showToast(error instanceof Error ? error.message : "保存失败");
+      return;
+    }
+
+    if (response.duplicate) {
+      showToast("已添加");
+      safeClosePopupAndReset();
       return;
     }
 

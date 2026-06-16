@@ -118,11 +118,44 @@ async function handleSaveWord(entry) {
   }
 
   const existingWords = await getWords();
-  const duplicate = existingWords.some(
-    (item) => String(item?.word || '').toLowerCase() === String(entry.word || '').toLowerCase()
-  );
+  const incomingContexts = Array.isArray(entry.contexts) ? entry.contexts : [];
+  const duplicateEntry = existingWords.find((item) => {
+    const sameWord = normalizeWordValue(item?.word) === normalizeWordValue(entry.word);
+    if (!sameWord) return false;
+
+    const existingContexts = Array.isArray(item.contexts) ? item.contexts : [];
+    if (incomingContexts.length === 0) {
+      return true;
+    }
+
+    return incomingContexts.every((incomingContext) =>
+      existingContexts.some((existingContext) =>
+        normalizeContextValue(existingContext?.context) === normalizeContextValue(incomingContext?.context) &&
+        normalizeSourceLinkValue(existingContext) === normalizeSourceLinkValue(incomingContext)
+      )
+    );
+  });
+  const duplicate = Boolean(duplicateEntry);
+
+  if (duplicate) {
+    return {
+      saved: true,
+      duplicate: true,
+      entry: duplicateEntry,
+      sync: { ok: true, skipped: true, queueSize: 0 },
+    };
+  }
 
   const result = await addWord(entry);
+
+  if (result.duplicate) {
+    return {
+      saved: true,
+      duplicate: true,
+      entry: result.entry,
+      sync: { ok: true, skipped: true, queueSize: 0 },
+    };
+  }
   
   // 只有在已登录时才尝试同步
   if (isLoggedIn) {
@@ -303,6 +336,14 @@ function normalizeBaseUrl(settings, auth) {
 
 function normalizeWordValue(word) {
   return String(word || '').trim().toLowerCase();
+}
+
+function normalizeContextValue(context) {
+  return String(context || '').trim().replace(/\s+/g, ' ');
+}
+
+function normalizeSourceLinkValue(context) {
+  return String(context?.sourceLink || context?.source_link || context?.sourceUrl || context?.source_url || '').trim();
 }
 
 function normalizeBookValue(bookId) {
