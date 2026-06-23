@@ -256,6 +256,8 @@ async function handleGetSyncStatus() {
 
   return {
     deviceId,
+    syncQueueSize: syncQueue.length,
+    deleteQueueSize: deleteQueue.length,
     queueSize: syncQueue.length + deleteQueue.length,
     isLoggedIn: Boolean(auth?.accessToken && auth?.refreshToken),
     user: auth?.user || null,

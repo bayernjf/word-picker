@@ -6,6 +6,7 @@ import {
   normalizeContextValue,
   normalizeSourceLinkValue,
   selectPreferredSyncBook,
+  formatSyncStatusSummary,
 } from "../lib/utils.js";
 
 describe("escapeHtml", () => {
@@ -118,5 +119,26 @@ describe("selectPreferredSyncBook", () => {
       { name: "New", isSync: true, updatedAt: 200 },
     ];
     expect(selectPreferredSyncBook(books).name).toBe("New");
+  });
+});
+
+describe("formatSyncStatusSummary", () => {
+  it("formats split sync and delete queues with a last sync time", () => {
+    const result = formatSyncStatusSummary({
+      syncQueueSize: 3,
+      deleteQueueSize: 2,
+      lastSyncAt: Date.UTC(2024, 0, 1, 8, 30, 0),
+    });
+
+    expect(result).toContain("待同步 3 条");
+    expect(result).toContain("待删除 2 条");
+    expect(result).toContain("最后同步");
+    expect(result).not.toContain("从未同步");
+  });
+
+  it("falls back to total queue size and never-synced text", () => {
+    expect(formatSyncStatusSummary({ queueSize: 4 })).toBe(
+      "待同步 4 条 ｜ 待删除 0 条 ｜ 最后同步：从未同步"
+    );
   });
 });

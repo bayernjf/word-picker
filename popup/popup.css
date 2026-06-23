@@ -65,6 +65,21 @@ body {
   font-weight: 600;
 }
 
+.sync-status {
+  margin-top: 12px;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  background: #161b22;
+  color: #8b949e;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sync-status:empty {
+  display: none;
+}
+
 .status {
   min-height: 20px;
   margin-top: 10px;

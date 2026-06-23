@@ -1,8 +1,9 @@
-import { escapeHtml, sendMessage, formatDate } from "../lib/utils.js";
+import { escapeHtml, sendMessage, formatDate, formatSyncStatusSummary } from "../lib/utils.js";
 
 const searchInput = document.getElementById("search-input");
 const wordList = document.getElementById("word-list");
 const statusNode = document.getElementById("status");
+const syncStatusNode = document.getElementById("sync-status");
 const exportJsonButton = document.getElementById("export-json");
 const exportCsvButton = document.getElementById("export-csv");
 const bookSelect = document.getElementById("book-select");
@@ -29,6 +30,7 @@ function bindEvents() {
   refreshBooksButton.addEventListener("click", async () => {
     await loadBooks();
     await loadWords(searchInput.value);
+    await refreshSyncStatus();
   });
 
   exportJsonButton.addEventListener("click", () => {
@@ -124,6 +126,7 @@ async function loadWords(query = "") {
     }
     renderList(response.words || []);
     setStatus(`共 ${response.words?.length || 0} 条记录`);
+    await refreshSyncStatus();
   } catch (error) {
     renderError(error instanceof Error ? error.message : "加载失败");
   }
@@ -170,7 +173,8 @@ function renderList(words) {
           id: button.dataset.id
         });
         setStatus("已删除");
-        loadWords(searchInput.value);
+        await loadWords(searchInput.value);
+        await refreshSyncStatus();
       } catch (error) {
         setStatus(error instanceof Error ? error.message : "删除失败");
       }
@@ -210,6 +214,20 @@ function downloadFile(fileName, content, mimeType) {
 
 function setStatus(message) {
   statusNode.textContent = message;
+}
+
+async function refreshSyncStatus() {
+  if (!syncStatusNode) {
+    return;
+  }
+
+  try {
+    const response = await sendMessage({ type: "GET_SYNC_STATUS" });
+    syncStatusNode.textContent = formatSyncStatusSummary(response);
+  } catch (error) {
+    console.warn("[WordCatcher] Failed to load sync status:", error);
+    syncStatusNode.textContent = "";
+  }
 }
 
 // 检查登录状态并渲染相应界面
