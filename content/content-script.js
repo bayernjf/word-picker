@@ -17,6 +17,8 @@
   const WORD_PATTERN = /[A-Za-z][A-Za-z'-]{1,44}/g;
   const EXCLUDED_SELECTOR = "input, textarea, [contenteditable='true'], [contenteditable=''], pre, code";
   const CURSOR_STYLE_ID = "word-catcher-cursor-style";
+  const HIGHLIGHT_STYLE_ID = "word-catcher-highlight-style";
+  const HIGHLIGHT_NAME = "word-catcher-hover";
   const POPUP_WIDTH = 320;
   const PEN_CURSOR_DATA_URL =
     "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath fill='%234472C4' d='M19.73 5.33a2 2 0 0 0-2.83 0l-1.42 1.42 4.24 4.24 1.42-1.42a2 2 0 0 0 0-2.83l-1.41-1.41Z'/%3E%3Cpath fill='%23FFFFFF' d='m14.07 8.1 4.24 4.24-8.84 8.84-4.98 1.13 1.13-4.98 8.45-8.45Z'/%3E%3Cpath fill='%231F2A44' d='m6.54 17.99 1.47-1.47 1.94 1.94-1.48 1.47-1.93.44.44-1.93Z'/%3E%3C/g%3E%3C/svg%3E";
@@ -38,6 +40,7 @@
   let lookupKeyPressed = false;
   let isUpdatingPopup = false;
   let pendingPopupFocus = false;
+  let wordHighlight = null;
 
   const KEYDOWN_POPUP_DELAY_MS = 100;
 
@@ -167,6 +170,7 @@
     clearHoverTimer();
     clearKeydownPopupTimer();
     removeCursor();
+    clearWordHighlight();
     if (preservePopup && popupContainer?.isConnected) {
       currentState = currentState === STATE.LOADING ? STATE.LOADING : STATE.SHOWING;
       positionPopup(popupContainer, activeAnchor.x, activeAnchor.y);
@@ -201,6 +205,7 @@
     currentLookup = null;
     currentState = STATE.IDLE;
     removeCursor();
+    clearWordHighlight();
   }
 
   function scheduleInitialLookupAfterKeydown() {
@@ -278,6 +283,9 @@
       return;
     }
 
+    // 即时高亮鼠标指向的单词（独立于弹窗的 hoverDelay，体验更跟手）
+    updateHoverHighlight(event.clientX, event.clientY);
+
     if (currentState !== STATE.PEN && currentState !== STATE.SHOWING && currentState !== STATE.LOADING) {
       return;
     }
@@ -288,6 +296,16 @@
     hoverTimer = window.setTimeout(() => {
       void lookupAtPoint(event.clientX, event.clientY);
     }, delay);
+  }
+
+  // 根据鼠标位置检测单词并即时高亮；未命中单词时清除高亮
+  function updateHoverHighlight(x, y) {
+    const detection = detectWordAtPoint(x, y);
+    if (detection?.node) {
+      highlightWord(detection.node, detection.start, detection.end);
+    } else {
+      clearWordHighlight();
+    }
   }
 
   async function lookupAtPoint(x, y) {
@@ -853,6 +871,47 @@
     const style = document.getElementById(CURSOR_STYLE_ID);
     if (style) {
       style.remove();
+    }
+  }
+
+  // 初始化 CSS Custom Highlight（用于在按住唤起键时高亮鼠标指向的单词）
+  function ensureWordHighlight() {
+    if (typeof Highlight === "undefined" || !CSS?.highlights) {
+      return null;
+    }
+    if (!wordHighlight) {
+      wordHighlight = new Highlight();
+      CSS.highlights.set(HIGHLIGHT_NAME, wordHighlight);
+    }
+    if (!document.getElementById(HIGHLIGHT_STYLE_ID)) {
+      const style = document.createElement("style");
+      style.id = HIGHLIGHT_STYLE_ID;
+      style.textContent = `::highlight(${HIGHLIGHT_NAME}) { background-color: Highlight; color: HighlightText; }`;
+      document.documentElement.appendChild(style);
+    }
+    return wordHighlight;
+  }
+
+  // 高亮指定文本节点内 [start, end) 区间的单词，效果与划词选中一致
+  function highlightWord(node, start, end) {
+    const highlight = ensureWordHighlight();
+    if (!highlight || !node) {
+      return;
+    }
+    try {
+      const range = document.createRange();
+      range.setStart(node, start);
+      range.setEnd(node, end);
+      highlight.clear();
+      highlight.add(range);
+    } catch (error) {
+      highlight.clear();
+    }
+  }
+
+  function clearWordHighlight() {
+    if (wordHighlight) {
+      wordHighlight.clear();
     }
   }
 
