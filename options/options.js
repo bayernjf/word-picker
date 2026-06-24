@@ -1,5 +1,5 @@
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS } from "../lib/constants.js";
+import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS, WORD_BASE_APP_URL } from "../lib/constants.js";
 
 const form = document.getElementById("settings-form");
 const statusNode = document.getElementById("status");
@@ -11,6 +11,7 @@ const authLogoutButton = document.getElementById("auth-logout");
 const authLoggedOut = document.getElementById("auth-logged-out");
 const authLoggedIn = document.getElementById("auth-logged-in");
 const authUserInfo = document.getElementById("auth-user-info");
+const rememberDeviceCheckbox = document.getElementById("rememberDevice7Days");
 
 document.addEventListener("DOMContentLoaded", async () => {
   await loadSettings();
@@ -19,6 +20,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   authLoginButton?.addEventListener("click", handleAuthLogin);
   authRegisterButton?.addEventListener("click", handleAuthRegister);
   authLogoutButton?.addEventListener("click", handleAuthLogout);
+  rememberDeviceCheckbox?.addEventListener("change", handleRememberDeviceChange);
   await refreshAuthStatus();
   await refreshSyncStatus();
 });
@@ -49,11 +51,28 @@ async function refreshAuthStatus() {
     } else {
       authLoggedOut.style.display = "block";
       authLoggedIn.style.display = "none";
+      await fillRememberedCredentials();
     }
   } catch (error) {
     console.warn("[WordCatcher] 获取登录状态失败：", error);
     authLoggedOut.style.display = "block";
     authLoggedIn.style.display = "none";
+    await fillRememberedCredentials();
+  }
+}
+
+// 回填已记住的登录凭证：7天内回填邮箱+密码，超过7天只回填邮箱
+async function fillRememberedCredentials() {
+  try {
+    const response = await sendMessage({ type: "AUTH_GET_CREDENTIALS" });
+    if (response?.email && !form.authEmail.value) {
+      form.authEmail.value = response.email;
+    }
+    if (response?.password && !form.authPassword.value) {
+      form.authPassword.value = response.password;
+    }
+  } catch (error) {
+    console.warn("[WordCatcher] 回填登录凭证失败：", error);
   }
 }
 
@@ -81,29 +100,16 @@ async function handleAuthLogin() {
 }
 
 async function handleAuthRegister() {
-  const email = String(form.authEmail.value || "").trim().toLowerCase();
-  const password = String(form.authPassword.value || "");
-  const baseUrl = DEFAULT_SYNC_BASE_URL;
-  if (!email || !password) {
-    setStatus("请填写邮箱和密码");
-    return;
-  }
-  if (password.length < 6) {
-    setStatus("密码至少需要6个字符");
-    return;
-  }
+  // 在新标签页打开 word-base 的注册页面（带参数强制显示注册表单）
+  const registerUrl = `${WORD_BASE_APP_URL.replace(/\/+$/, "")}/?auth=register`;
   try {
-    setStatus("正在注册...");
-    const response = await sendMessage({ type: "AUTH_REGISTER", email, password, baseUrl });
-    if (response.ok) {
-      setStatus("注册成功，开始同步...");
-      await refreshAuthStatus();
-      await refreshSyncStatus();
+    if (chrome?.tabs?.create) {
+      await chrome.tabs.create({ url: registerUrl });
     } else {
-      setStatus(`注册失败: ${response.error || "unknown"}`);
+      window.open(registerUrl, "_blank");
     }
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "注册失败");
+    setStatus(error instanceof Error ? error.message : "打开注册页面失败");
   }
 }
 
@@ -115,6 +121,24 @@ async function handleAuthLogout() {
     await refreshSyncStatus();
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "退出失败");
+  }
+}
+
+async function handleRememberDeviceChange() {
+  const remember = rememberDeviceCheckbox.checked;
+  try {
+    // 即时保存勾选状态（合并到现有设置，避免覆盖其他字段）
+    const response = await sendMessage({ type: "GET_SETTINGS" });
+    const current = response.settings || {};
+    await sendMessage({
+      type: "SAVE_SETTINGS",
+      settings: { ...current, rememberDevice7Days: remember }
+    });
+    // 同步更新已登录态的过期时间
+    await sendMessage({ type: "AUTH_SET_REMEMBER", remember });
+    setStatus(remember ? "已开启在此设备记住7天" : "已关闭在此设备记住7天");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "保存失败");
   }
 }
 

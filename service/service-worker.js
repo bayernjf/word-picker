@@ -93,6 +93,10 @@ async function handleMessage(message) {
       return handleAuthLogout();
     case MESSAGE_TYPES.AUTH_STATUS:
       return handleAuthStatus();
+    case MESSAGE_TYPES.AUTH_SET_REMEMBER:
+      return handleAuthSetRemember(message.remember);
+    case MESSAGE_TYPES.AUTH_GET_CREDENTIALS:
+      return handleAuthGetCredentials();
     case MESSAGE_TYPES.TRANSLATE:
       return handleTranslate(message.word);
     case MESSAGE_TYPES.PING:
@@ -253,14 +257,15 @@ async function handleGetSyncStatus() {
   const deviceId = await ensureDeviceId();
   const syncQueue = await getSyncQueue();
   const deleteQueue = await getDeleteQueue();
+  const loggedIn = Boolean(auth?.accessToken && auth?.refreshToken) && !isAuthExpired(auth);
 
   return {
     deviceId,
     syncQueueSize: syncQueue.length,
     deleteQueueSize: deleteQueue.length,
     queueSize: syncQueue.length + deleteQueue.length,
-    isLoggedIn: Boolean(auth?.accessToken && auth?.refreshToken),
-    user: auth?.user || null,
+    isLoggedIn: loggedIn,
+    user: loggedIn ? (auth?.user || null) : null,
     lastSyncAt: auth?.lastSyncAt || null,
   };
 }
@@ -601,6 +606,14 @@ async function flushSyncQueue(settings) {
     return { ok: false, skipped: true, queueSize };
   }
 
+  // 登录态已过期：清除并跳过同步
+  if (isAuthExpired(auth)) {
+    await setAuthData(null);
+    await setCurrentUserEmail(null);
+    const queueSize = (await getSyncQueue()).length + (await getDeleteQueue()).length;
+    return { ok: false, skipped: true, expired: true, queueSize };
+  }
+
   if (isSyncing) {
     return { ok: false, skipped: true, queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length };
   }
@@ -664,6 +677,75 @@ async function setAuthData(auth) {
   await chrome.storage.local.set({ [STORAGE_AUTH]: auth });
 }
 
+// 记住登录态的有效期（7天）
+const REMEMBER_DEVICE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
+
+// 本地记住的登录凭证（用于回填登录表单）
+const STORAGE_REMEMBERED_CREDENTIALS = 'rememberedCredentials';
+
+async function getRememberedCredentials() {
+  const data = await chrome.storage.local.get([STORAGE_REMEMBERED_CREDENTIALS]);
+  const cred = data?.[STORAGE_REMEMBERED_CREDENTIALS];
+  return cred && typeof cred === 'object' ? cred : null;
+}
+
+// 保存登录凭证（email 始终保留以便回填；password 仅在勾选记住时保留）
+async function saveRememberedCredentials(email, password, remember) {
+  await chrome.storage.local.set({
+    [STORAGE_REMEMBERED_CREDENTIALS]: {
+      email: email || '',
+      password: remember ? (password || '') : '',
+      savedAt: Date.now(),
+    },
+  });
+}
+
+// 计算登录态过期时间：勾选“记住7天”则 7 天后过期，否则不设过期（长期保持直到手动登出）
+function computeAuthExpiry(remember) {
+  return remember ? Date.now() + REMEMBER_DEVICE_DURATION_MS : null;
+}
+
+// 判断登录态是否已过期
+function isAuthExpired(auth) {
+  return Boolean(auth?.expiresAt) && Date.now() > auth.expiresAt;
+}
+
+// 勾选/取消“在此设备记住7天”时，更新当前登录态的过期时间
+async function handleAuthSetRemember(remember) {
+  const auth = await getAuthData();
+  if (!auth?.accessToken) {
+    return { ok: true };
+  }
+  await setAuthData({ ...auth, expiresAt: computeAuthExpiry(Boolean(remember)) });
+  // 取消勾选时清除已记住的密码，仅保留邮箱
+  if (!remember) {
+    const cred = await getRememberedCredentials();
+    if (cred) {
+      await chrome.storage.local.set({
+        [STORAGE_REMEMBERED_CREDENTIALS]: { ...cred, password: '' },
+      });
+    }
+  }
+  return { ok: true };
+}
+
+// 获取回填用的登录凭证：7天内返回邮箱+密码，超过7天只返回邮箱
+async function handleAuthGetCredentials() {
+  const cred = await getRememberedCredentials();
+  if (!cred) {
+    return { ok: true, email: '', password: '' };
+  }
+  const expired = !cred.savedAt || Date.now() > cred.savedAt + REMEMBER_DEVICE_DURATION_MS;
+  if (expired && cred.password) {
+    // 超过7天：清除密码，仅保留邮箱
+    await chrome.storage.local.set({
+      [STORAGE_REMEMBERED_CREDENTIALS]: { ...cred, password: '' },
+    });
+    return { ok: true, email: cred.email || '', password: '' };
+  }
+  return { ok: true, email: cred.email || '', password: expired ? '' : (cred.password || '') };
+}
+
 // 存储当前登录用户的唯一标识（用于检测用户切换）
 const STORAGE_CURRENT_USER_EMAIL = 'currentUserEmail';
 
@@ -702,16 +784,20 @@ async function handleAuthLogin(email, password, baseUrl) {
     }
     
     await setCurrentUserEmail(newEmail);
+    const settings = await getSettings();
     await setAuthData({
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       user: result.user,
       baseUrl: normalizedUrl,
       lastSyncAt: Date.now(),
+      expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
     });
+    // 记住凭证用于回填：邮箱始终保存，密码仅在勾选记住时保存
+    await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
     await setupAlarms();
     // 立即拉取新用户的数据
-    await flushSyncQueue(await getSettings());
+    await flushSyncQueue(settings);
   }
   return result;
 }
@@ -730,16 +816,20 @@ async function handleAuthRegister(email, password, baseUrl) {
     }
     
     await setCurrentUserEmail(newEmail);
+    const settings = await getSettings();
     await setAuthData({
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       user: result.user,
       baseUrl: normalizedUrl,
       lastSyncAt: Date.now(),
+      expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
     });
+    // 记住凭证用于回填：邮箱始终保存，密码仅在勾选记住时保存
+    await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
     await setupAlarms();
     // 立即拉取新用户的数据
-    await flushSyncQueue(await getSettings());
+    await flushSyncQueue(settings);
   }
   return result;
 }
@@ -754,6 +844,13 @@ async function handleAuthLogout() {
 
 async function handleAuthStatus() {
   const auth = await getAuthData();
+  // 登录态已过期：清除并视为未登录
+  if (auth && isAuthExpired(auth)) {
+    await setAuthData(null);
+    await setCurrentUserEmail(null);
+    await clearUserData();
+    return { ok: true, isLoggedIn: false, user: null, baseUrl: auth.baseUrl || '' };
+  }
   return {
     ok: true,
     isLoggedIn: Boolean(auth?.accessToken && auth?.refreshToken),
