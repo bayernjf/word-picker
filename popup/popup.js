@@ -15,6 +15,15 @@ let currentBookId = "";
 document.addEventListener("DOMContentLoaded", async () => {
   await checkAuthAndRender();
   bindEvents();
+
+  // 监听后台登录态变化（如 token 失效被清空），实时刷新界面
+  if (chrome?.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === "local" && changes.authData) {
+        void checkAuthAndRender();
+      }
+    });
+  }
 });
 
 function bindEvents() {

@@ -23,6 +23,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   rememberDeviceCheckbox?.addEventListener("change", handleRememberDeviceChange);
   await refreshAuthStatus();
   await refreshSyncStatus();
+
+  // 监听后台登录态变化（如 token 失效被清空），实时刷新页面显示
+  if (chrome?.storage?.onChanged) {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName === "local" && changes.authData) {
+        void refreshAuthStatus();
+        void refreshSyncStatus();
+      }
+    });
+  }
 });
 
 async function loadSettings() {

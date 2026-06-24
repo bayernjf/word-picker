@@ -111,6 +111,9 @@ async function handleSaveWord(entry) {
     throw new Error('单词内容不能为空');
   }
 
+  // 规范化：将单词首字母转为小写（仅当首字母为大写时）
+  entry = { ...entry, word: lowercaseFirstLetter(entry.word) };
+
   const auth = await getAuthData();
   const settings = await getSettings();
   
@@ -350,6 +353,25 @@ function normalizeBaseUrl(settings, auth) {
 
 function normalizeWordValue(word) {
   return String(word || '').trim().toLowerCase();
+}
+
+// 规范化首字母大写的普通英文单词：仅 "Hello" 这类首字母大写、其余非全大写的单词转小写首字母；
+// 全大写缩写（如 API、NASA）保持不变。
+function lowercaseFirstLetter(word) {
+  const text = String(word || '');
+  if (!text) {
+    return text;
+  }
+  // 仅处理纯英文字母单词（允许连字符/撇号，如 well-known、it's）
+  if (!/^[A-Za-z][A-Za-z'-]*$/.test(text)) {
+    return text;
+  }
+  const first = text.charAt(0);
+  // 首字母必须是大写，且其余部分不能含大写字母（排除 API、NASA、iOS 等）
+  if (first >= 'A' && first <= 'Z' && text.slice(1) === text.slice(1).toLowerCase()) {
+    return first.toLowerCase() + text.slice(1);
+  }
+  return text;
 }
 
 function normalizeBookValue(bookId) {
@@ -633,8 +655,13 @@ async function flushSyncQueue(settings) {
 
       const refreshed = await doRefreshToken(normalizeBaseUrl(settings, currentAuth), currentAuth.refreshToken);
       if (!refreshed.ok || !refreshed.accessToken) {
-        await setAuthData(null);
-        return { ok: false, error: refreshed.error || 'token_refresh_failed', queueSize: (await getSyncQueue()).length };
+        // 仅在 refresh token 真失效时登出；网络/临时错误保留登录态，下次重试
+        if (refreshed.authInvalid) {
+          await setAuthData(null);
+          await setCurrentUserEmail(null);
+          return { ok: false, error: refreshed.error || 'token_refresh_failed', loggedOut: true, queueSize: (await getSyncQueue()).length };
+        }
+        return { ok: false, skipped: true, error: refreshed.error || 'token_refresh_temporary', queueSize: (await getSyncQueue()).length };
       }
 
       currentAuth = {
@@ -909,7 +936,9 @@ async function doRefreshToken(baseUrl, refreshToken) {
     const text = await response.text();
 
     if (!response.ok) {
-      return { ok: false, status: response.status, error: text || 'refresh_failed' };
+      // 仅 401/403 视为 refresh token 真失效（需要登出）；其余（5xx 等）视为临时错误
+      const authInvalid = response.status === 401 || response.status === 403;
+      return { ok: false, status: response.status, authInvalid, error: text || 'refresh_failed' };
     }
 
     const data = text ? JSON.parse(text) : null;
@@ -924,7 +953,8 @@ async function doRefreshToken(baseUrl, refreshToken) {
       user: data.user || null,
     };
   } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    // 网络错误/超时：临时错误，不应登出
+    return { ok: false, authInvalid: false, error: error instanceof Error ? error.message : String(error) };
   } finally {
     clearTimeout(timeout);
   }
