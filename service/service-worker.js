@@ -3,10 +3,12 @@ import {
   deleteWordById,
   ensureDefaults,
   getBooks,
+  getCacheMap,
   getSettings,
   getWords,
   getWordsByBook,
   saveBooks,
+  saveCacheMap,
   saveSettings,
   saveWords,
   searchWords,
@@ -965,6 +967,39 @@ async function handleTranslate(word) {
     throw new Error('待翻译单词不能为空');
   }
   const settings = await getSettings();
+  const cacheKey = word.trim().toLowerCase();
+
+  // 1. 先查缓存，命中直接返回（0 网络，秒回）
+  const cache = await getCacheMap();
+  const cached = cache[cacheKey];
+  if (cached && cached.translation) {
+    // 更新 LRU 访问时间
+    cached.lastAccess = Date.now();
+    await saveCacheMap(cache);
+    return { translation: cached.translation, fromCache: true };
+  }
+
+  // 2. 未命中才走网络翻译
   const translation = await translateWord(word, settings);
+
+  // 3. 写回缓存（仅缓存有效结果，兜底结果不缓存以便后续重试）
+  if (translation && translation.provider !== 'fallback') {
+    cache[cacheKey] = { translation, lastAccess: Date.now() };
+    pruneCache(cache, settings.maxCacheSize || 200);
+    await saveCacheMap(cache);
+  }
+
   return { translation };
+}
+
+// LRU 淘汰：超出上限时删除最久未访问的条目
+function pruneCache(cache, maxSize) {
+  const keys = Object.keys(cache);
+  if (keys.length <= maxSize) {
+    return;
+  }
+  keys
+    .sort((a, b) => (cache[a]?.lastAccess || 0) - (cache[b]?.lastAccess || 0))
+    .slice(0, keys.length - maxSize)
+    .forEach((key) => delete cache[key]);
 }
