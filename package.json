@@ -8,7 +8,10 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:dict": "node scripts/build-dict.js --limit=50000",
+    "pack": "node scripts/pack.js",
+    "release": "npm run build:dict && npm run pack"
   },
   "author": "Trae GPT-5.4",
   "license": "MIT",

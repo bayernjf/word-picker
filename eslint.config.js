@@ -36,6 +36,14 @@ export default [
     }
   },
   {
+    files: ["scripts/**/*.js"],
+    languageOptions: {
+      globals: {
+        ...globals.node
+      }
+    }
+  },
+  {
     ignores: ["node_modules/**", "assets/**"]
   }
 ];
