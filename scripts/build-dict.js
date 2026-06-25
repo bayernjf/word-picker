@@ -92,7 +92,17 @@ function cleanTranslation(raw) {
     .filter((item) => !/^\[(网络|医|化|计|经|法|军|电|建|机|物|生|动|植)\]/.test(item));
 
   const kept = parts.length > 0 ? parts : [text];
-  return kept.join("；");
+  return normalizePosInTranslation(kept.join("；"));
+}
+
+/**
+ * 把 ECDICT 释义中的非标准词性缩写统一为标准写法。
+ * 例："a. 新的" → "adj. 新的"
+ */
+function normalizePosInTranslation(text) {
+  // 匹配义项开头或分号后的 "a. "，替换为 "adj. "
+  // 注意：不全局裸替换，避免误伤正文里的 "a."
+  return text.replace(/(^|；)a\. /g, "$1adj. ");
 }
 
 function buildExchangeMap(exchange) {
