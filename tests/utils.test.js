@@ -89,6 +89,12 @@ describe("normalizeSourceLinkValue", () => {
     expect(normalizeSourceLinkValue({})).toBe("");
     expect(normalizeSourceLinkValue(null)).toBe("");
   });
+
+  it("去掉 URL fragment 后再比较", () => {
+    expect(
+      normalizeSourceLinkValue({ sourceLink: "https://example.com/page#:~:text=hello" })
+    ).toBe("https://example.com/page");
+  });
 });
 
 describe("selectPreferredSyncBook", () => {
