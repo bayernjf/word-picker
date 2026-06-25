@@ -1,4 +1,7 @@
 import { escapeHtml, sendMessage, formatDate, formatSyncStatusSummary } from "../lib/utils.js";
+import { createLogger } from "../lib/logger.js";
+
+const logger = createLogger("popup");
 
 const searchInput = document.getElementById("search-input");
 const wordList = document.getElementById("word-list");
@@ -61,12 +64,14 @@ function bindEvents() {
 
 async function loadBooks() {
   try {
+    logger.debug('loadBooks');
     const response = await sendMessage({
       type: "GET_BOOKS"
     });
     renderBooks(response.books || []);
+    logger.info('loadBooks success', { count: (response.books || []).length });
   } catch (error) {
-    console.error("加载单词本失败", error);
+    logger.error("加载单词本失败", error);
   }
 }
 
@@ -112,6 +117,7 @@ function renderBooks(books) {
 
 async function loadWords(query = "") {
   setStatus("加载中...");
+  logger.debug('loadWords', { bookId: currentBookId, query });
 
   try {
     // 如果没有选择单词本，尝试先加载单词本
@@ -134,9 +140,12 @@ async function loadWords(query = "") {
       });
     }
     renderList(response.words || []);
-    setStatus(`共 ${response.words?.length || 0} 条记录`);
+    const count = response.words?.length || 0;
+    setStatus(`共 ${count} 条记录`);
+    logger.info('loadWords success', { count });
     await refreshSyncStatus();
   } catch (error) {
+    logger.error('loadWords failed', error);
     renderError(error instanceof Error ? error.message : "加载失败");
   }
 }
@@ -234,7 +243,7 @@ async function refreshSyncStatus() {
     const response = await sendMessage({ type: "GET_SYNC_STATUS" });
     syncStatusNode.textContent = formatSyncStatusSummary(response);
   } catch (error) {
-    console.warn("[WordCatcher] Failed to load sync status:", error);
+    logger.warn("Failed to load sync status:", error);
     syncStatusNode.textContent = "";
   }
 }
@@ -260,7 +269,7 @@ async function checkAuthAndRender() {
     }
   } catch (error) {
     // 出错时默认显示登录提示
-    console.warn("[WordCatcher] 检查登录状态失败：", error);
+    logger.warn("检查登录状态失败：", error);
     const authRequired = document.getElementById('auth-required');
     const mainContent = document.getElementById('main-content');
     authRequired.style.display = 'block';

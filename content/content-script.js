@@ -1,4 +1,9 @@
 (() => {
+  const _logger = {
+    warn: (...args) => console.warn(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [WARN]`, ...args),
+    error: (...args) => console.error(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [ERROR]`, ...args),
+  };
+
   const { escapeHtml, sendMessage } = window.__WordCatcherShared;
 
   const STATE = {
@@ -59,7 +64,7 @@
         ...(response.settings || {})
       };
     } catch (error) {
-      console.warn("[WordCatcher] 加载设置失败，使用默认设置：", error);
+      _logger.warn("加载设置失败，使用默认设置：", error);
       settings = { ...DEFAULT_SETTINGS };
     }
   }
@@ -325,6 +330,7 @@
       return;
     }
 
+    _logger.debug('lookupAtPoint', { word: detection.word, x, y });
     currentLookup = {
       ...detection,
       signature
@@ -346,6 +352,7 @@
 
       const translation = response.translation || buildLoadingData(detection.word);
       currentLookup.translation = translation;
+      _logger.debug('lookupAtPoint translation received', { word: detection.word, provider: translation.provider });
       updatePopup({
         ...translation,
         sentence: extractSentenceFromDetection(detection)
@@ -886,7 +893,7 @@
       try {
         closePopupAndReset();
       } catch (error) {
-        console.warn("[WordCatcher] 关闭弹窗时出现异常：", error);
+        _logger.warn("关闭弹窗时出现异常：", error);
       }
     }, 0);
   }

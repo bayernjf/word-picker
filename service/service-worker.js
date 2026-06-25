@@ -22,6 +22,9 @@ import {
 } from '../lib/utils.js';
 import { DEFAULT_SYNC_BASE_URL } from '../lib/constants.js';
 import { MESSAGE_TYPES } from '../lib/messaging.js';
+import { createLogger } from '../lib/logger.js';
+
+const logger = createLogger('service-worker');
 
 const STORAGE_DEVICE_ID = 'deviceId';
 const STORAGE_SYNC_QUEUE = 'syncQueue';
@@ -64,6 +67,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 async function handleMessage(message) {
   await ensureDefaults();
+  logger.debug('handleMessage', { type: message?.type });
 
   switch (message?.type) {
     case MESSAGE_TYPES.SAVE_WORD:
@@ -118,6 +122,7 @@ async function handleSaveWord(entry) {
 
   // 规范化：将单词首字母转为小写（仅当首字母为大写时）
   entry = { ...entry, word: lowercaseFirstLetter(entry.word) };
+  logger.debug('handleSaveWord', { word: entry.word, bookId: entry.bookId });
 
   const auth = await getAuthData();
   const settings = await getSettings();
@@ -161,6 +166,7 @@ async function handleSaveWord(entry) {
   const duplicate = Boolean(duplicateEntry);
 
   if (duplicate) {
+    logger.info('handleSaveWord duplicate skipped', { word: entry.word });
     return {
       saved: true,
       duplicate: true,
@@ -172,6 +178,7 @@ async function handleSaveWord(entry) {
   const result = await addWord(entry);
 
   if (result.duplicate) {
+    logger.info('handleSaveWord duplicate skipped (after add)', { word: entry.word });
     return {
       saved: true,
       duplicate: true,
@@ -186,8 +193,9 @@ async function handleSaveWord(entry) {
     await enqueueSyncEntry(result.entry || entry);
     // 不 await：后台 flush，失败不影响本地结果与用户提示
     flushSyncQueue(settings).catch((error) => {
-      console.warn('[handleSaveWord] 后台同步失败，已入队待重试：', error);
+      logger.warn('[handleSaveWord] 后台同步失败，已入队待重试：', error);
     });
+    logger.info('handleSaveWord success (queued for sync)', { word: entry.word, queueSize: (await getSyncQueue()).length });
     return {
       saved: Boolean(result.success),
       duplicate,
@@ -196,6 +204,7 @@ async function handleSaveWord(entry) {
     };
   }
 
+  logger.info('handleSaveWord success (local only)', { word: entry.word });
   return {
     saved: Boolean(result.success),
     duplicate,
@@ -208,6 +217,7 @@ async function handleDeleteWord(id) {
   if (!id) {
     throw new Error('缺少单词 id');
   }
+  logger.debug('handleDeleteWord', { id });
 
   const result = await deleteWordById(id);
   if (result.success) {
@@ -215,6 +225,7 @@ async function handleDeleteWord(id) {
   }
 
   const sync = await flushSyncQueue(await getSettings());
+  logger.info('handleDeleteWord success', { id, deleted: result.success });
   return {
     deleted: Boolean(result.success),
     sync,
@@ -412,6 +423,7 @@ async function syncForRead(settingsOverride) {
 async function pullChanges(auth, settings) {
   const baseUrl = normalizeBaseUrl(settings, auth);
   const token = auth.accessToken;
+  logger.debug('pullChanges started', { baseUrl });
   const [booksRes, wordsRes] = await Promise.all([
     fetch(`${baseUrl}/api/v1/books`, { headers: { Authorization: `Bearer ${token}` } }),
     fetch(`${baseUrl}/api/v1/words`, { headers: { Authorization: `Bearer ${token}` } }),
@@ -421,15 +433,22 @@ async function pullChanges(auth, settings) {
     throw new Error('unauthorized');
   }
 
+  let bookCount = 0;
+  let wordCount = 0;
   if (booksRes.ok) {
     const books = await booksRes.json();
-    await saveBooks(Array.isArray(books) ? books.map(mapServerBookToLocal) : []);
+    const localBooks = Array.isArray(books) ? books.map(mapServerBookToLocal) : [];
+    await saveBooks(localBooks);
+    bookCount = localBooks.length;
   }
 
   if (wordsRes.ok) {
     const words = await wordsRes.json();
-    await saveWords(Array.isArray(words) ? words.map(mapServerWordToLocal) : []);
+    const localWords = Array.isArray(words) ? words.map(mapServerWordToLocal) : [];
+    await saveWords(localWords);
+    wordCount = localWords.length;
   }
+  logger.info('pullChanges success', { books: bookCount, words: wordCount });
 }
 
 function mapServerBookToLocal(book) {
@@ -540,6 +559,7 @@ async function pushWords(auth, settings) {
   if (syncQueue.length === 0) {
     return { ok: true, processed: 0 };
   }
+  logger.debug('pushWords started', { queueSize: syncQueue.length });
 
   const baseUrl = normalizeBaseUrl(settings, auth);
 
@@ -566,7 +586,7 @@ async function pushWords(auth, settings) {
         }
       }
     } catch (err) {
-      console.warn('[pushWords] 无法从服务器获取单词本:', err.message);
+      logger.warn('[pushWords] 无法从服务器获取单词本:', err.message);
     }
   }
 
@@ -593,11 +613,11 @@ async function pushWords(auth, settings) {
     }, []); // 合并同一单词/单词本的重复推送，避免服务端 upsert 冲突。
 
   if (payload.length === 0) {
-    console.warn('[pushWords] 无法同步单词：没有可用的 book_id，已缓存待下次同步');
+    logger.warn('[pushWords] 无法同步单词：没有可用的 book_id，已缓存待下次同步');
     return { ok: false, error: 'no_book_id', queueSize: syncQueue.length };
   }
 
-  console.log(`[pushWords] 准备同步 ${payload.length} 个单词，book_id: ${payload[0]?.book_id}`);
+  logger.info(`[pushWords] 准备同步 ${payload.length} 个单词，book_id: ${payload[0]?.book_id}`);
 
   const response = await fetch(`${baseUrl}/api/v1/words/batch`, {
     method: 'POST',
@@ -628,7 +648,7 @@ async function pushWords(auth, settings) {
         return !syncedWordKeys.has(key);
       })
     );
-    console.log(`[pushWords] 同步完成，清除 ${syncedWordKeys.size} 条，队列剩余 ${Math.max(0, syncQueue.length - syncedWordKeys.size)} 条`);
+    logger.info(`[pushWords] 同步完成，清除 ${syncedWordKeys.size} 条，队列剩余 ${Math.max(0, syncQueue.length - syncedWordKeys.size)} 条`);
   }
 
   return { ok: true, processed: payload.length };
@@ -636,8 +656,12 @@ async function pushWords(auth, settings) {
 
 async function flushSyncQueue(settings) {
   const auth = await getAuthData();
+  const syncQueue = await getSyncQueue();
+  const deleteQueue = await getDeleteQueue();
+  const queueSize = syncQueue.length + deleteQueue.length;
+
   if (!auth?.accessToken || !auth?.refreshToken) {
-    const queueSize = (await getSyncQueue()).length + (await getDeleteQueue()).length;
+    logger.debug('flushSyncQueue skipped (not logged in)', { queueSize });
     return { ok: false, skipped: true, queueSize };
   }
 
@@ -645,15 +669,18 @@ async function flushSyncQueue(settings) {
   if (isAuthExpired(auth)) {
     await setAuthData(null);
     await setCurrentUserEmail(null);
-    const queueSize = (await getSyncQueue()).length + (await getDeleteQueue()).length;
+    logger.warn('flushSyncQueue skipped (auth expired)', { queueSize });
     return { ok: false, skipped: true, expired: true, queueSize };
   }
 
   if (isSyncing) {
-    return { ok: false, skipped: true, queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length };
+    logger.debug('flushSyncQueue skipped (already syncing)');
+    return { ok: true, skipped: true, queueSize };
   }
 
+  logger.debug('flushSyncQueue started', { syncQueue: syncQueue.length, deleteQueue: deleteQueue.length });
   isSyncing = true;
+
   try {
     let currentAuth = auth;
 
@@ -690,6 +717,7 @@ async function flushSyncQueue(settings) {
       await pullChanges(currentAuth, settings);
     }
     await setAuthData({ ...currentAuth, lastSyncAt: Date.now() });
+    logger.info('flushSyncQueue success', { queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length });
 
     return {
       ok: true,
@@ -697,6 +725,7 @@ async function flushSyncQueue(settings) {
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } catch (error) {
+    logger.error('flushSyncQueue failed', { error: String(error) });
     return {
       ok: false,
       error: error instanceof Error ? error.message : String(error),

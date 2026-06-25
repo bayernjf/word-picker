@@ -1,5 +1,8 @@
 import { sendMessage, clampNumber } from "../lib/utils.js";
 import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS, WORD_BASE_APP_URL } from "../lib/constants.js";
+import { createLogger } from "../lib/logger.js";
+
+const logger = createLogger("options");
 
 const form = document.getElementById("settings-form");
 const statusNode = document.getElementById("status");
@@ -65,7 +68,7 @@ async function refreshAuthStatus() {
       await fillRememberedCredentials();
     }
   } catch (error) {
-    console.warn("[WordCatcher] 获取登录状态失败：", error);
+    logger.warn("获取登录状态失败：", error);
     authLoggedOut.style.display = "block";
     authLoggedIn.style.display = "none";
     await fillRememberedCredentials();
@@ -83,7 +86,7 @@ async function fillRememberedCredentials() {
       form.authPassword.value = response.password;
     }
   } catch (error) {
-    console.warn("[WordCatcher] 回填登录凭证失败：", error);
+    logger.warn("回填登录凭证失败：", error);
   }
 }
 
@@ -95,17 +98,21 @@ async function handleAuthLogin() {
     setStatus("请填写邮箱和密码");
     return;
   }
+  logger.debug('handleAuthLogin', { email });
   try {
     setStatus("正在登录...");
     const response = await sendMessage({ type: "AUTH_LOGIN", email, password, baseUrl });
     if (response.ok) {
+      logger.info('handleAuthLogin success');
       setStatus("登录成功，开始同步...");
       await refreshAuthStatus();
       await refreshSyncStatus();
     } else {
+      logger.warn('handleAuthLogin failed', { error: response.error });
       setStatus(`登录失败: ${response.error || "unknown"}`);
     }
   } catch (error) {
+    logger.error('handleAuthLogin error', error);
     setStatus(error instanceof Error ? error.message : "登录失败");
   }
 }
@@ -183,17 +190,22 @@ async function handleSubmit(event) {
 async function handleSyncNow() {
   try {
     setStatus("正在同步...");
+    logger.debug('handleSyncNow');
     const response = await sendMessage({ type: "SYNC_NOW" });
     const sync = response.sync || {};
     if (sync.ok) {
+      logger.info('handleSyncNow success', { processed: sync.processed, queueSize: sync.queueSize });
       setStatus(`同步完成：处理 ${sync.processed || 0} 条，队列剩余 ${sync.queueSize ?? 0} 条`);
     } else if (sync.skipped) {
+      logger.debug('handleSyncNow skipped', { reason: sync.error, queueSize: sync.queueSize });
       setStatus(`已跳过同步：队列 ${sync.queueSize ?? 0} 条`);
     } else {
+      logger.warn('handleSyncNow failed', { error: sync.error });
       setStatus(`同步失败：${sync.error || sync.status || "unknown"}`);
     }
     await refreshSyncStatus();
   } catch (error) {
+    logger.error('handleSyncNow error', error);
     setStatus(error instanceof Error ? error.message : "同步失败");
   }
 }
@@ -214,7 +226,7 @@ async function refreshSyncStatus() {
       }
     }
   } catch (error) {
-    console.warn("[WordCatcher] 获取同步状态失败：", error);
+    logger.warn("获取同步状态失败：", error);
     if (syncStatusNode) {
       syncStatusNode.textContent = "";
     }
