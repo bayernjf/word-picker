@@ -1,5 +1,7 @@
 (() => {
   const _logger = {
+    debug: (...args) => console.debug(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [DEBUG]`, ...args),
+    info: (...args) => console.info(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [INFO]`, ...args),
     warn: (...args) => console.warn(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [WARN]`, ...args),
     error: (...args) => console.error(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [ERROR]`, ...args),
   };
