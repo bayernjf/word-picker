@@ -1,12 +1,6 @@
 (() => {
-  const _logger = {
-    debug: (...args: unknown[]) => console.debug(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [DEBUG]`, ...args),
-    info: (...args: unknown[]) => console.info(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [INFO]`, ...args),
-    warn: (...args: unknown[]) => console.warn(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [WARN]`, ...args),
-    error: (...args: unknown[]) => console.error(`[${new Date().toLocaleTimeString('zh-CN',{hour12:false})}] [content-script] [ERROR]`, ...args),
-  };
-
-  const { escapeHtml, sendMessage } = (window as any).__WordCatcherShared;
+  const { escapeHtml, sendMessage, createLogger } = (window as any).__WordCatcherShared;
+  const _logger = createLogger("content-script");
 
   const STATE = {
     IDLE: "idle",
@@ -21,12 +15,14 @@
     lookupKey: "Control" | "Command" | "Alt" | "Option";
     hoverDelay: number;
     autoSpeak: boolean;
+    fireworksEffect: "canvas" | "css" | "none";
   }
 
   const DEFAULT_SETTINGS: Settings = {
     lookupKey: "Control",
     hoverDelay: 100,
     autoSpeak: false,
+    fireworksEffect: "css",
   };
 
   const WORD_PATTERN = /[A-Za-z][A-Za-z'-]{1,44}/g;
@@ -125,6 +121,7 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         exitPenMode();
+        (window as any).__WordCatcherFireworks.clearFireworks();
       }
     });
   }
@@ -718,6 +715,7 @@
 
       if (response.saved) {
         showToast("添加成功");
+        (window as any).__WordCatcherFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
         safeClosePopupAndReset();
         return;
       }
@@ -940,6 +938,7 @@
 
     if (response.saved) {
       showToast("添加成功");
+      (window as any).__WordCatcherFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
       safeClosePopupAndReset();
       return;
     }
