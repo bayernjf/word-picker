@@ -3,7 +3,7 @@
   "name": "WordCatcher",
   "version": "1.0.0",
   "description": "按住 Ctrl/Cmd 悬停查词，一键收录到单词本。",
-  "author": "Trae GPT-5.4",
+  "author": "bayernjf",
   "icons": {
     "16": "assets/icons/icon16.png",
     "48": "assets/icons/icon48.png",
@@ -20,10 +20,6 @@
     "http://localhost:3001/*",
     "http://127.0.0.1:3001/*"
   ],
-  "background": {
-    "service_worker": "service/service-worker.js",
-    "type": "module"
-  },
   "content_scripts": [
     {
       "matches": [
@@ -47,15 +43,8 @@
       "128": "assets/icons/icon128.png"
     }
   },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'"
-  },
-  "options_page": "options/options.html",
-  "commands": {
-    "_execute_action": {
-      "suggested_key": {
-        "default": "Ctrl+Shift+W"
-      }
-    }
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
   }
 }

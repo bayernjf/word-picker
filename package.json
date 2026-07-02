@@ -10,7 +10,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build:ts": "tsc -p tsconfig.extension.json && tsc -p tsconfig.scripts.json",
-    "build": "npm run build:ts && node dist/scripts/copy-static.js",
+    "build": "npm run build:ts && node dist/scripts/build-cross-browser.js all",
+    "build:chrome": "npm run build:ts && node dist/scripts/copy-static.js && node dist/scripts/build-cross-browser.js chrome",
+    "build:edge": "npm run build:ts && node dist/scripts/copy-static.js && node dist/scripts/build-cross-browser.js edge",
+    "build:safari": "npm run build:ts && node dist/scripts/copy-static.js && node dist/scripts/build-cross-browser.js safari",
     "build:dict": "npm run build:ts && node dist/scripts/build-dict.js --limit=50000",
     "pack": "npm run build:ts && node dist/scripts/pack.js",
     "release": "npm run build:dict && npm run pack"
@@ -19,12 +22,15 @@
   "license": "MIT",
   "devDependencies": {
     "@eslint/js": "^9.13.0",
-    "@types/chrome": "^0.2.0",
     "@types/node": "^26.0.1",
+    "@types/webextension-polyfill": "^0.12.5",
     "eslint": "^9.13.0",
     "globals": "^15.11.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.0",
     "vitest": "^2.1.3"
+  },
+  "dependencies": {
+    "webextension-polyfill": "^0.12.0"
   }
 }

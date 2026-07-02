@@ -1,3 +1,4 @@
+import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
 import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS, WORD_BASE_APP_URL } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
@@ -45,7 +46,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 监听后台登录态变化（如 token 失效被清空），实时刷新页面显示
   if (chrome?.storage?.onChanged) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
+    browser.storage.onChanged.addListener((changes, areaName) => {
       if (areaName === "local" && changes.authData) {
         void refreshAuthStatus();
         void refreshSyncStatus();
@@ -139,7 +140,7 @@ async function handleAuthRegister(): Promise<void> {
   const registerUrl = `${WORD_BASE_APP_URL.replace(/\/+$/, "")}/?auth=register`;
   try {
     if (chrome?.tabs?.create) {
-      await chrome.tabs.create({ url: registerUrl });
+      await browser.tabs.create({ url: registerUrl });
     } else {
       window.open(registerUrl, "_blank");
     }

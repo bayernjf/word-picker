@@ -100,9 +100,9 @@ function createLogger(namespace: string): Logger {
 
   function sendMessage(message: object): Promise<any> {
     return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, (response: any) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
+      browser.runtime.sendMessage(message, (response: any) => {
+        if (browser.runtime.lastError) {
+          reject(new Error(browser.runtime.lastError.message));
           return;
         }
         if (!response?.success) {

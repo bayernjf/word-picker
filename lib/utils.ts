@@ -1,3 +1,4 @@
+import browser from "webextension-polyfill";
 import { DEFAULT_BOOK_NAME } from "./constants.js";
 
 export function escapeHtml(value: unknown): string {
@@ -17,9 +18,9 @@ export interface MessageResponse {
 
 export function sendMessage<TResponse extends { success: boolean; error?: string } = MessageResponse>(message: object): Promise<TResponse> {
   return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response: TResponse) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
+    browser.runtime.sendMessage(message, (response: TResponse) => {
+      if (browser.runtime.lastError) {
+        reject(new Error(browser.runtime.lastError.message));
         return;
       }
       if (!response?.success) {

@@ -117,7 +117,7 @@
     document.addEventListener("focusin", handleFocusInWhilePinned, true);
     window.addEventListener("blur", exitPenMode, true);
     window.addEventListener("resize", handleViewportChange, true);
-    chrome.storage.onChanged.addListener(handleStorageChange);
+    browser.storage.onChanged.addListener(handleStorageChange);
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         exitPenMode();

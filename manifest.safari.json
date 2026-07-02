@@ -1,0 +1,5 @@
+{
+  "background": {
+    "scripts": ["browser-polyfill.js", "service/safari-background.js"]
+  }
+}

@@ -1,3 +1,4 @@
+import browser from "webextension-polyfill";
 import {
   selectPreferredSyncBook,
   normalizeContextValue,
@@ -142,7 +143,7 @@ export interface StorageData {
 }
 
 export async function ensureDefaults(): Promise<StorageData> {
-  const current: any = await chrome.storage.local.get([
+  const current: any = await browser.storage.local.get([
     STORAGE_KEYS.WORDS,
     STORAGE_KEYS.CACHE,
     STORAGE_KEYS.SETTINGS,
@@ -186,7 +187,7 @@ export async function ensureDefaults(): Promise<StorageData> {
   };
 
   if (Object.keys(patch).length > 0) {
-    await chrome.storage.local.set(patch);
+    await browser.storage.local.set(patch);
   }
 
   return {
@@ -207,7 +208,7 @@ export async function saveSettings(settingsPatch: Partial<Settings>): Promise<Se
     ...(await getSettings()),
     ...settingsPatch,
   };
-  await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings });
+  await browser.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings });
   return settings;
 }
 
@@ -217,7 +218,7 @@ export async function getWords(): Promise<Word[]> {
 }
 
 export async function saveWords(words: Word[]): Promise<Word[]> {
-  await chrome.storage.local.set({ [STORAGE_KEYS.WORDS]: words });
+  await browser.storage.local.set({ [STORAGE_KEYS.WORDS]: words });
   return words;
 }
 
@@ -397,18 +398,18 @@ export async function getCacheMap(): Promise<CacheMap> {
 }
 
 export async function saveCacheMap(cache: CacheMap): Promise<CacheMap> {
-  await chrome.storage.local.set({ [STORAGE_KEYS.CACHE]: cache });
+  await browser.storage.local.set({ [STORAGE_KEYS.CACHE]: cache });
   return cache;
 }
 
 // 单词本管理
 export async function getBooks(): Promise<Book[]> {
-  const { [STORAGE_KEYS.BOOKS]: books } = await chrome.storage.local.get([STORAGE_KEYS.BOOKS]);
+  const { [STORAGE_KEYS.BOOKS]: books } = await browser.storage.local.get([STORAGE_KEYS.BOOKS]);
   return Array.isArray(books) ? books : [];
 }
 
 export async function saveBooks(books: Book[]): Promise<Book[]> {
-  await chrome.storage.local.set({ [STORAGE_KEYS.BOOKS]: books });
+  await browser.storage.local.set({ [STORAGE_KEYS.BOOKS]: books });
   return books;
 }
 
@@ -444,11 +445,11 @@ export async function deleteBookById(id: string): Promise<boolean> {
 
 // 同步版本管理
 export async function getSyncVersion(): Promise<number> {
-  const { [STORAGE_KEYS.SYNC_VERSION]: version } = await chrome.storage.local.get([STORAGE_KEYS.SYNC_VERSION]);
+  const { [STORAGE_KEYS.SYNC_VERSION]: version } = await browser.storage.local.get([STORAGE_KEYS.SYNC_VERSION]);
   return Number(version) || 0;
 }
 
 export async function setSyncVersion(version: number): Promise<number> {
-  await chrome.storage.local.set({ [STORAGE_KEYS.SYNC_VERSION]: Number(version) });
+  await browser.storage.local.set({ [STORAGE_KEYS.SYNC_VERSION]: Number(version) });
   return version;
 }
