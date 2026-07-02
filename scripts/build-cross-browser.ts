@@ -9,7 +9,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { copyStaticAssets } from "./copy-static.js";
+import { copyStaticAssets, copyPolyfill } from "./copy-static.js";
 
 const ROOT = process.cwd();
 const SRC = path.join(ROOT, "dist", "extension");
@@ -86,8 +86,11 @@ function main(): void {
     process.exit(1);
   }
 
-  // Copy static assets to dist/extension first (manifest.json, popup.html, etc.)
+  // Copy static assets to dist/extension first (popup.html, options.html, etc.)
   copyStaticAssets();
+
+  // Copy browser polyfill for content scripts
+  copyPolyfill();
 
   const target = process.argv[2] || "all";
 

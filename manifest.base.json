@@ -26,6 +26,7 @@
         "<all_urls>"
       ],
       "js": [
+        "content/browser-polyfill.js",
         "content/shared.js",
         "content/fireworks.js",
         "content/content-script.js"

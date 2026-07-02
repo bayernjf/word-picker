@@ -7,9 +7,9 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const DIST = path.join(ROOT, 'dist', 'extension');
+const POLYFILL_SRC = path.join(ROOT, 'node_modules', 'webextension-polyfill', 'dist', 'browser-polyfill.min.js');
 
 const STATIC_FILES = [
-  'manifest.json',
   'popup/popup.html',
   'popup/popup.css',
   'options/options.html',
@@ -45,6 +45,13 @@ export function copyStaticAssets(): void {
   }
 
   console.log('[copy-static] Done');
+}
+
+export function copyPolyfill(): void {
+  const dest = path.join(DIST, 'content', 'browser-polyfill.js');
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(POLYFILL_SRC, dest);
+  console.log('[copy-static] browser-polyfill.js → content/');
 }
 
 // 直接运行（非被导入时）
