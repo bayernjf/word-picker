@@ -4,7 +4,9 @@
  * 将 manifest.base.json 与 manifest.{target}.json 合并，
  * 处理 Safari 专用适配，输出到 dist/{target}/。
  *
- * 用法：node dist/scripts/build-cross-browser.js [chrome|edge|safari|all]
+ * Chrome 构建产物同时适用于 Edge（Chromium 内核完全兼容）。
+ *
+ * 用法：node dist/scripts/build-cross-browser.js [chrome|safari|all]
  */
 
 import fs from "node:fs";
@@ -27,7 +29,7 @@ function deepMerge(target: any, source: any): any {
   return result;
 }
 
-function buildForBrowser(target: "chrome" | "edge" | "safari"): void {
+function buildForBrowser(target: "chrome" | "safari"): void {
   const distDir = path.join(ROOT, "dist", target);
   console.log(`\n[build-cross-browser] Building for ${target}...`);
 
@@ -96,13 +98,13 @@ function main(): void {
 
   if (target === "all") {
     buildForBrowser("chrome");
-    buildForBrowser("edge");
     buildForBrowser("safari");
-  } else if (target === "chrome" || target === "edge" || target === "safari") {
+  } else if (target === "chrome" || target === "safari") {
     buildForBrowser(target);
   } else {
     console.error(`[build-cross-browser] Unknown target: ${target}`);
-    console.error("Usage: node build-cross-browser.js [chrome|edge|safari|all]");
+    console.error("Usage: node build-cross-browser.js [chrome|safari|all]");
+    console.error("Note: Chrome build works for Edge too — they share the same Chromium engine.");
     process.exit(1);
   }
 

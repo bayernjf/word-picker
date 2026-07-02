@@ -12,12 +12,10 @@
     "build:ts": "tsc -p tsconfig.extension.json && tsc -p tsconfig.scripts.json",
     "build": "npm run build:ts && node dist/scripts/build-cross-browser.js all",
     "build:chrome": "npm run build:ts && node dist/scripts/build-cross-browser.js chrome",
-    "build:edge": "npm run build:ts && node dist/scripts/build-cross-browser.js edge",
     "build:safari": "npm run build:ts && node dist/scripts/build-cross-browser.js safari",
     "build:dict": "npm run build:ts && node dist/scripts/build-dict.js --limit=50000",
     "pack": "node dist/scripts/pack.js all",
     "pack:chrome": "node dist/scripts/pack.js chrome",
-    "pack:edge": "node dist/scripts/pack.js edge",
     "pack:safari": "node dist/scripts/pack.js safari",
     "release": "npm run build:dict && npm run pack"
   },

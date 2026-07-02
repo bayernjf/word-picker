@@ -2,7 +2,7 @@
  * 打包脚本：生成可上传各浏览器商店的 zip
  *
  * 运行前需先执行 build-cross-browser。
- * 用法：node dist/scripts/pack.js [chrome|edge|safari|all]
+ * 用法：node dist/scripts/pack.js [chrome|safari|all]
  */
 
 import { execFileSync } from "node:child_process";
@@ -42,18 +42,18 @@ function main(): void {
   const target = process.argv[2] || "all";
 
   if (target === "all") {
-    for (const t of ["chrome", "edge", "safari"]) {
+    for (const t of ["chrome", "safari"]) {
       if (fs.existsSync(path.join(DIST_DIR, t, "manifest.json"))) {
         packTarget(t);
       } else {
         console.log(`[pack] Skipping ${t}: dist/${t}/manifest.json not found`);
       }
     }
-  } else if (["chrome", "edge", "safari"].includes(target)) {
+  } else if (["chrome", "safari"].includes(target)) {
     packTarget(target);
   } else {
     console.error(`[pack] Unknown target: ${target}`);
-    console.error("Usage: node pack.js [chrome|edge|safari|all]");
+    console.error("Usage: node pack.js [chrome|safari|all]");
     process.exit(1);
   }
 
