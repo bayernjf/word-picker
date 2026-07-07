@@ -1,89 +1,63 @@
 /**
- * 打包脚本：生成可上传 Chrome 商店的 zip
+ * 打包脚本：生成可上传各浏览器商店的 zip
  *
- * 运行前要求 TypeScript 已编译到 dist/extension，离线词库已生成到 assets/dict/ecdict.min.json。
+ * 运行前需先执行 build-cross-browser。
+ * 用法：node dist/scripts/pack.js [chrome|safari|all]
  */
 
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { copyStaticAssets } from "./copy-static.js";
 
 const ROOT = process.cwd();
 const DIST_DIR = path.join(ROOT, "dist");
-const EXTENSION_DIR = path.join(DIST_DIR, "extension");
-const ZIP_PATH = path.join(DIST_DIR, "wordcatcher.zip");
 
-const ZIP_INCLUDE = [
-  "manifest.json",
-  "assets",
-  "content",
-  "lib",
-  "options",
-  "popup",
-  "service",
-];
+function packTarget(target: string): void {
+  const targetDir = path.join(DIST_DIR, target);
+  const manifestPath = path.join(targetDir, "manifest.json");
+  const zipPath = path.join(DIST_DIR, `wordpicker-${target}.zip`);
 
-const REQUIRED_COMPILED_FILES = [
-  "content/shared.js",
-  "content/content-script.js",
-  "content/fireworks.js",
-  "popup/popup.js",
-  "options/options.js",
-  "service/service-worker.js",
-];
-
-const REQUIRED_DICT = path.join(ROOT, "assets", "dict", "ecdict.min.json");
-
-function main(): void {
-  if (!fs.existsSync(REQUIRED_DICT)) {
-    console.error("[pack] 缺少离线词库：assets/dict/ecdict.min.json");
-    console.error("请先运行：npm run build:dict");
+  if (!fs.existsSync(manifestPath)) {
+    console.error(`[pack] dist/${target}/manifest.json not found. Run build-cross-browser first.`);
     process.exit(1);
   }
 
-  const missingCompiled = REQUIRED_COMPILED_FILES.filter(
-    (item) => !fs.existsSync(path.join(EXTENSION_DIR, item))
-  );
-  if (missingCompiled.length > 0) {
-    console.error(`[pack] 缺少编译产物：${missingCompiled.join(", ")}`);
-    console.error("请先运行：npm run build:ts");
-    process.exit(1);
-  }
+  const entries = fs.readdirSync(targetDir).filter((name) => name !== ".DS_Store");
 
-  // 复用 copy-static 逻辑复制静态资源
-  copyStaticAssets();
-
-  const missing = ZIP_INCLUDE.filter(
-    (item) => !fs.existsSync(path.join(EXTENSION_DIR, item))
-  );
-  if (missing.length > 0) {
-    console.error(`[pack] 缺少必需文件/目录：${missing.join(", ")}`);
-    process.exit(1);
-  }
-
-  fs.mkdirSync(DIST_DIR, { recursive: true });
-  if (fs.existsSync(ZIP_PATH)) {
-    fs.rmSync(ZIP_PATH);
+  if (fs.existsSync(zipPath)) {
+    fs.rmSync(zipPath);
   }
 
   execFileSync(
     "zip",
-    [
-      "-r", "-X", ZIP_PATH,
-      ...ZIP_INCLUDE,
-      "--exclude", "*.DS_Store",
-      "--exclude", "__MACOSX/*",
-      "--exclude", "*.map",
-    ],
-    { cwd: EXTENSION_DIR, stdio: "inherit" }
+    ["-r", "-X", zipPath, ...entries, "--exclude", "*.DS_Store", "--exclude", "__MACOSX/*", "--exclude", "*.map"],
+    { cwd: targetDir, stdio: "inherit" }
   );
 
-  const bytes = fs.statSync(ZIP_PATH).size;
-  console.log("\n[pack] 打包完成");
-  console.log(`  输出：${ZIP_PATH}`);
-  console.log(`  体积：${(bytes / 1024 / 1024).toFixed(2)} MB`);
-  console.log("  可直接上传 Chrome 开发者后台。");
+  const bytes = fs.statSync(zipPath).size;
+  console.log(`\n[pack] ${target} → ${zipPath} (${(bytes / 1024 / 1024).toFixed(2)} MB)`);
+}
+
+function main(): void {
+  const target = process.argv[2] || "all";
+
+  if (target === "all") {
+    for (const t of ["chrome", "safari"]) {
+      if (fs.existsSync(path.join(DIST_DIR, t, "manifest.json"))) {
+        packTarget(t);
+      } else {
+        console.log(`[pack] Skipping ${t}: dist/${t}/manifest.json not found`);
+      }
+    }
+  } else if (["chrome", "safari"].includes(target)) {
+    packTarget(target);
+  } else {
+    console.error(`[pack] Unknown target: ${target}`);
+    console.error("Usage: node pack.js [chrome|safari|all]");
+    process.exit(1);
+  }
+
+  console.log("\n[pack] Done");
 }
 
 main();

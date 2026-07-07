@@ -3,7 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist/extension",
     "rootDir": ".",
-    "types": ["chrome"],
+    "types": [],
     "lib": ["ES2022", "DOM"],
     "noEmitOnError": true
   },

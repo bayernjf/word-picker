@@ -1,4 +1,4 @@
-# WordCatcher
+# WordPicker
 
 一个基于 Chromium Manifest V3 的浏览器扩展：按住 `Ctrl` 悬停英文单词即可查词翻译，并支持一键收藏到本地单词本。
 

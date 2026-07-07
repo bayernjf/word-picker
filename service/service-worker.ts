@@ -1,3 +1,4 @@
+import browser from 'webextension-polyfill';
 import {
   addWord,
   deleteWordById,
@@ -39,27 +40,27 @@ const STORAGE_AUTH = 'authData';
 
 let isSyncing = false;
 
-chrome.runtime.onInstalled.addListener(() => {
+browser.runtime.onInstalled.addListener(() => {
   void ensureDefaults();
   void setupAlarms();
   void ensureDictImported();
 });
 
-chrome.runtime.onStartup?.addListener(() => {
+browser.runtime.onStartup?.addListener(() => {
   void ensureDefaults();
   void setupAlarms();
   void ensureDictImported();
 });
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
+browser.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'sync-words') {
     const settings = await getSettings();
     await flushSyncQueue(settings);
   }
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  handleMessage(message)
+browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  handleMessage(message as Message)
     .then((payload) => sendResponse({ success: true, ...payload }))
     .catch((error) => {
       sendResponse({
@@ -286,14 +287,14 @@ async function handleExportWords(format: string, words: Word[]): Promise<any> {
   if (normalized === 'csv') {
     return {
       format: 'csv',
-      fileName: 'wordcatcher-words.csv',
+      fileName: 'wordpicker-words.csv',
       data: toCsv(words),
     };
   }
 
   return {
     format: 'json',
-    fileName: 'wordcatcher-words.json',
+    fileName: 'wordpicker-words.json',
     data: JSON.stringify({ words }, null, 2),
   };
 }
@@ -345,14 +346,14 @@ async function handleGetSyncStatus(): Promise<any> {
 }
 
 async function setupAlarms(): Promise<void> {
-  const existing = await chrome.alarms.get('sync-words');
+  const existing = await browser.alarms.get('sync-words');
   if (!existing) {
-    await chrome.alarms.create('sync-words', { periodInMinutes: 3 });
+    await browser.alarms.create('sync-words', { periodInMinutes: 3 });
   }
 }
 
 async function ensureDeviceId(): Promise<string> {
-  const current = await chrome.storage.local.get([STORAGE_DEVICE_ID]);
+  const current = await browser.storage.local.get([STORAGE_DEVICE_ID]);
   const existing = typeof current?.[STORAGE_DEVICE_ID] === 'string' ? current[STORAGE_DEVICE_ID].trim() : '';
   if (existing) {
     return existing;
@@ -360,17 +361,17 @@ async function ensureDeviceId(): Promise<string> {
   const next = globalThis.crypto?.randomUUID
     ? globalThis.crypto.randomUUID()
     : `device-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  await chrome.storage.local.set({ [STORAGE_DEVICE_ID]: next });
+  await browser.storage.local.set({ [STORAGE_DEVICE_ID]: next });
   return next;
 }
 
 async function getQueue(key: string): Promise<any[]> {
-  const current = await chrome.storage.local.get([key]);
+  const current = await browser.storage.local.get([key]);
   return Array.isArray(current?.[key]) ? current[key] : [];
 }
 
 async function setQueue(key: string, queue: any[]): Promise<any[]> {
-  await chrome.storage.local.set({ [key]: queue });
+  await browser.storage.local.set({ [key]: queue });
   return queue;
 }
 
@@ -804,13 +805,13 @@ function isAuthData(value: unknown): value is AuthData {
 }
 
 async function getAuthData(): Promise<AuthData | null> {
-  const data = await chrome.storage.local.get([STORAGE_AUTH]);
+  const data = await browser.storage.local.get([STORAGE_AUTH]);
   const auth = data?.[STORAGE_AUTH];
   return isAuthData(auth) ? auth : null;
 }
 
 async function setAuthData(auth: AuthData | null): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_AUTH]: auth });
+  await browser.storage.local.set({ [STORAGE_AUTH]: auth });
 }
 
 // 记住登录态的有效期（7天）
@@ -836,14 +837,14 @@ function isRememberedCredentials(value: unknown): value is RememberedCredentials
 }
 
 async function getRememberedCredentials(): Promise<RememberedCredentials | null> {
-  const data = await chrome.storage.local.get([STORAGE_REMEMBERED_CREDENTIALS]);
+  const data = await browser.storage.local.get([STORAGE_REMEMBERED_CREDENTIALS]);
   const cred = data?.[STORAGE_REMEMBERED_CREDENTIALS];
   return isRememberedCredentials(cred) ? cred : null;
 }
 
 // 保存登录凭证（email 始终保留以便回填；password 仅在勾选记住时保留）
 async function saveRememberedCredentials(email: string, password: string, remember: boolean): Promise<void> {
-  await chrome.storage.local.set({
+  await browser.storage.local.set({
     [STORAGE_REMEMBERED_CREDENTIALS]: {
       email: email || '',
       password: remember ? (password || '') : '',
@@ -873,7 +874,7 @@ async function handleAuthSetRemember(remember: boolean): Promise<{ ok: boolean }
   if (!remember) {
     const cred = await getRememberedCredentials();
     if (cred) {
-      await chrome.storage.local.set({
+      await browser.storage.local.set({
         [STORAGE_REMEMBERED_CREDENTIALS]: { ...cred, password: '' },
       });
     }
@@ -890,7 +891,7 @@ async function handleAuthGetCredentials(): Promise<{ ok: boolean; email: string;
   const expired = !cred.savedAt || Date.now() > cred.savedAt + REMEMBER_DEVICE_DURATION_MS;
   if (expired && cred.password) {
     // 超过7天：清除密码，仅保留邮箱
-    await chrome.storage.local.set({
+    await browser.storage.local.set({
       [STORAGE_REMEMBERED_CREDENTIALS]: { ...cred, password: '' },
     });
     return { ok: true, email: cred.email || '', password: '' };
@@ -902,18 +903,18 @@ async function handleAuthGetCredentials(): Promise<{ ok: boolean; email: string;
 const STORAGE_CURRENT_USER_EMAIL = 'currentUserEmail';
 
 async function getCurrentUserEmail(): Promise<string | null> {
-  const data = await chrome.storage.local.get([STORAGE_CURRENT_USER_EMAIL]);
+  const data = await browser.storage.local.get([STORAGE_CURRENT_USER_EMAIL]);
   const email = data[STORAGE_CURRENT_USER_EMAIL];
   return typeof email === 'string' ? email : null;
 }
 
 async function setCurrentUserEmail(email: string | null): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_CURRENT_USER_EMAIL]: email });
+  await browser.storage.local.set({ [STORAGE_CURRENT_USER_EMAIL]: email });
 }
 
 // 清空用户数据（在切换用户或登出时调用）
 async function clearUserData(): Promise<void> {
-  await chrome.storage.local.remove([
+  await browser.storage.local.remove([
     'words',
     'books',
     'syncQueue',

@@ -12,11 +12,12 @@
  * 仅在 service worker 中使用（IndexedDB 不可用于无 window 的纯函数模块）。
  */
 
+import browser from "webextension-polyfill";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger("offlineDict");
 
-const DB_NAME = "wordcatcher-dict";
+const DB_NAME = "wordpicker-dict";
 const DB_VERSION = 1;
 const STORE_ENTRIES = "entries"; // keyPath: key（小写单词）
 const STORE_LEMMA = "lemma"; // keyPath: from（小写变形）
@@ -90,7 +91,7 @@ async function doImport(): Promise<void> {
   const db = await openDb();
 
   // 读取打包词库的版本号
-  const assetUrl = chrome.runtime.getURL(DICT_ASSET_PATH);
+  const assetUrl = browser.runtime.getURL(DICT_ASSET_PATH);
   const response = await fetch(assetUrl);
   if (!response.ok) {
     throw new Error(`无法加载词库资源：HTTP ${response.status}`);

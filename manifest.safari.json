@@ -1,0 +1,6 @@
+{
+  "background": {
+    "scripts": ["browser-polyfill.js", "service/safari-background.js"],
+    "type": "module"
+  }
+}

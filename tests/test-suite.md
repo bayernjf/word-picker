@@ -1,4 +1,4 @@
-# WordCatcher 手动测试清单
+# WordPicker 手动测试清单
 
 ## 核心交互
 
@@ -19,9 +19,9 @@
 ## 导出
 
 1. 在 Popup 中点击“导出 JSON”。
-2. 确认浏览器下载 `wordcatcher-words.json`。
+2. 确认浏览器下载 `wordpicker-words.json`。
 3. 再点击“导出 CSV”。
-4. 确认浏览器下载 `wordcatcher-words.csv`。
+4. 确认浏览器下载 `wordpicker-words.csv`。
 
 ## 设置
 
