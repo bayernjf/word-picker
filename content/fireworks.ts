@@ -43,7 +43,7 @@
       return fireworksShadow;
     }
     fireworksHost = document.createElement("div");
-    fireworksHost.id = "word-catcher-fireworks-host";
+    fireworksHost.id = "word-picker-fireworks-host";
     fireworksHost.style.position = "fixed";
     fireworksHost.style.left = "0";
     fireworksHost.style.top = "0";
@@ -223,7 +223,7 @@
     launchCssFireworks(x, y);
   }
 
-  (window as any).__WordCatcherFireworks = {
+  (window as any).__WordPickerFireworks = {
     launchFireworks,
     clearFireworks,
   };

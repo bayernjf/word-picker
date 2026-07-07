@@ -1,4 +1,4 @@
-# WordCatcher 生产上线就绪度评估
+# WordPicker 生产上线就绪度评估
 
 > 评判标准：真实投入生产（Chrome Web Store 上架 + 后端云同步可用）的工程标准，而非"本地能跑"。
 >

@@ -7,7 +7,7 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   error: 3,
 };
 
-const STORAGE_KEY = 'wordcatcher-log-level';
+const STORAGE_KEY = 'wordpicker-log-level';
 
 function getMinLevel(): LogLevel {
   try {
@@ -17,7 +17,7 @@ function getMinLevel(): LogLevel {
     // ignore
   }
   // 默认只输出 warn/error，开发调试时可在控制台执行：
-  // localStorage.setItem('wordcatcher-log-level', 'debug')
+  // localStorage.setItem('wordpicker-log-level', 'debug')
   return 'warn';
 }
 

@@ -1,3 +1,4 @@
+import browser from "webextension-polyfill";
 import { escapeHtml, sendMessage, formatDate, formatSyncStatusSummary, selectPreferredSyncBook } from "../lib/utils.js";
 import { createLogger } from "../lib/logger.js";
 import type { Book, SyncStatus } from "../lib/utils.js";
@@ -41,13 +42,11 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
 
   // 监听后台登录态变化（如 token 失效被清空），实时刷新界面
-  if (chrome?.storage?.onChanged) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === "local" && changes.authData) {
-        void checkAuthAndRender();
-      }
-    });
-  }
+  browser.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === "local" && changes.authData) {
+      void checkAuthAndRender();
+    }
+  });
 });
 
 function bindEvents(): void {
@@ -78,7 +77,7 @@ function bindEvents(): void {
   if (openOptionsBtn) {
     openOptionsBtn.addEventListener("click", async (event) => {
       event.preventDefault();
-      await chrome.runtime.openOptionsPage();
+      await browser.runtime.openOptionsPage();
     });
   }
 }

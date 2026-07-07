@@ -1,5 +1,5 @@
 interface Window {
-  __WordCatcherShared: {
+  __WordPickerShared: {
     escapeHtml: (value: unknown) => string;
     sendMessage: (message: object) => Promise<any>;
     createLogger: (namespace: string) => Logger;
@@ -15,7 +15,7 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   error: 3,
 };
 
-const STORAGE_KEY = 'wordcatcher-log-level';
+const STORAGE_KEY = 'wordpicker-log-level';
 
 class Logger {
   private ns: string;
@@ -99,22 +99,15 @@ function createLogger(namespace: string): Logger {
   }
 
   function sendMessage(message: object): Promise<any> {
-    return new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(message, (response: any) => {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        if (!response?.success) {
-          reject(new Error(response?.error || "扩展消息请求失败"));
-          return;
-        }
-        resolve(response);
-      });
+    return browser.runtime.sendMessage(message).then((response: any) => {
+      if (!response?.success) {
+        throw new Error(response?.error || "扩展消息请求失败");
+      }
+      return response;
     });
   }
 
-  window.__WordCatcherShared = {
+  window.__WordPickerShared = {
     escapeHtml,
     sendMessage,
     createLogger,
