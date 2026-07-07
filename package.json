@@ -1,5 +1,5 @@
 {
-  "name": "wordcatcher",
+  "name": "wordpicker",
   "version": "1.0.0",
   "description": "按住 Ctrl/Cmd 悬停查词，一键收录到单词本的浏览器扩展。",
   "type": "module",

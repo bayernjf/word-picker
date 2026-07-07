@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "WordCatcher",
+  "name": "WordPicker",
   "version": "1.0.0",
   "description": "按住 Ctrl/Cmd 悬停查词，一键收录到单词本。",
   "author": "bayernjf",
@@ -37,7 +37,7 @@
   ],
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "WordCatcher - 单词本",
+    "default_title": "WordPicker - 单词本",
     "default_icon": {
       "16": "assets/icons/icon16.png",
       "48": "assets/icons/icon48.png",

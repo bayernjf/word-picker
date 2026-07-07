@@ -15,7 +15,7 @@ const DIST_DIR = path.join(ROOT, "dist");
 function packTarget(target: string): void {
   const targetDir = path.join(DIST_DIR, target);
   const manifestPath = path.join(targetDir, "manifest.json");
-  const zipPath = path.join(DIST_DIR, `wordcatcher-${target}.zip`);
+  const zipPath = path.join(DIST_DIR, `wordpicker-${target}.zip`);
 
   if (!fs.existsSync(manifestPath)) {
     console.error(`[pack] dist/${target}/manifest.json not found. Run build-cross-browser first.`);

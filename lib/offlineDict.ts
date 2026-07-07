@@ -17,7 +17,7 @@ import { createLogger } from "./logger.js";
 
 const logger = createLogger("offlineDict");
 
-const DB_NAME = "wordcatcher-dict";
+const DB_NAME = "wordpicker-dict";
 const DB_VERSION = 1;
 const STORE_ENTRIES = "entries"; // keyPath: key（小写单词）
 const STORE_LEMMA = "lemma"; // keyPath: from（小写变形）

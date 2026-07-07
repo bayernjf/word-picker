@@ -287,14 +287,14 @@ async function handleExportWords(format: string, words: Word[]): Promise<any> {
   if (normalized === 'csv') {
     return {
       format: 'csv',
-      fileName: 'wordcatcher-words.csv',
+      fileName: 'wordpicker-words.csv',
       data: toCsv(words),
     };
   }
 
   return {
     format: 'json',
-    fileName: 'wordcatcher-words.json',
+    fileName: 'wordpicker-words.json',
     data: JSON.stringify({ words }, null, 2),
   };
 }

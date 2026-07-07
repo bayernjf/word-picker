@@ -1,4 +1,4 @@
-# 🖊️ WordCatcher 浏览器插件
+# 🖊️ WordPicker 浏览器插件
 
 > 需求文档 · 开发文档 · 技术文档 | Chromium (Chrome + Edge) Manifest V3 | 版本 1.0.0
 
@@ -29,7 +29,7 @@
 
 ### 1.1 项目概述
 
-**WordCatcher** 是一款 Chromium 浏览器（Chrome / Edge）扩展，帮助用户在浏览英文网页时**快速查词翻译并收集生词**。用户只需按住 `Ctrl` 键，鼠标悬停到任意英文单词上即可弹出翻译弹窗，一键收录到单词本——整个过程无需离开当前页面。
+**WordPicker** 是一款 Chromium 浏览器（Chrome / Edge）扩展，帮助用户在浏览英文网页时**快速查词翻译并收集生词**。用户只需按住 `Ctrl` 键，鼠标悬停到任意英文单词上即可弹出翻译弹窗，一键收录到单词本——整个过程无需离开当前页面。
 
 ### 1.2 核心功能清单
 
@@ -195,7 +195,7 @@
 ## 五、项目结构
 
 ```
-word-catcher/
+word-picker/
 ├── manifest.json          · 扩展清单 (MV3)
 ├── README.md
 ├── assets/
@@ -587,7 +587,7 @@ function detectWordAtPoint(x, y) {
 
 ```html
 <!-- 弹窗宿主容器，直接插入到 document.body -->
-<div id="word-catcher-popup-host"></div>
+<div id="word-picker-popup-host"></div>
 
 <!-- Shadow DOM 内部结构 -->
 <div class="popup-container">
@@ -654,7 +654,7 @@ let popupShadow = null;
 
 function createPopupHost() {
   popupHost = document.createElement('div');
-  popupHost.id = 'word-catcher-popup-host';
+  popupHost.id = 'word-picker-popup-host';
   document.body.appendChild(popupHost);
   popupShadow = popupHost.attachShadow({ mode: 'closed' });
 
@@ -770,7 +770,7 @@ function renderList(words) {
 ```json
 {
   "manifest_version": 3,
-  "name": "WordCatcher",
+  "name": "WordPicker",
   "version": "1.0.0",
   "description": "按住 Ctrl 悬停查词，一键收录到单词本",
   "author": "your-name@email.com",
@@ -805,7 +805,7 @@ function renderList(words) {
 
   "action": {
     "default_popup": "popup/popup.html",
-    "default_title": "WordCatcher - 单词本",
+    "default_title": "WordPicker - 单词本",
     "default_icon": {
       "16": "assets/icons/icon16.png",
       "48": "assets/icons/icon48.png"
@@ -898,7 +898,7 @@ function renderList(words) {
 
 ## 十五、跨浏览器适配（Chrome → Edge）
 
-WordCatcher 基于 Manifest V3 和标准 WebExtension API 开发，**在 Chrome 和 Edge 之间无需任何代码修改**即可运行。两个浏览器共享 Chromium 内核。
+WordPicker 基于 Manifest V3 和标准 WebExtension API 开发，**在 Chrome 和 Edge 之间无需任何代码修改**即可运行。两个浏览器共享 Chromium 内核。
 
 ### 发布流程
 
@@ -960,6 +960,6 @@ WordCatcher 基于 Manifest V3 和标准 WebExtension API 开发，**在 Chrome 
 
 ---
 
-*WordCatcher 浏览器插件开发文档 · 版本 1.0 · 生成于 2026-05-27*
+*WordPicker 浏览器插件开发文档 · 版本 1.0 · 生成于 2026-05-27*
 
 *文档风格参考 GitHub Dark Theme · 可直接交付 Trae / Cursor / Windsurf / Copilot 等 AI IDE 执行*

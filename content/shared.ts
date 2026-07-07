@@ -1,5 +1,5 @@
 interface Window {
-  __WordCatcherShared: {
+  __WordPickerShared: {
     escapeHtml: (value: unknown) => string;
     sendMessage: (message: object) => Promise<any>;
     createLogger: (namespace: string) => Logger;
@@ -15,7 +15,7 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   error: 3,
 };
 
-const STORAGE_KEY = 'wordcatcher-log-level';
+const STORAGE_KEY = 'wordpicker-log-level';
 
 class Logger {
   private ns: string;
@@ -107,7 +107,7 @@ function createLogger(namespace: string): Logger {
     });
   }
 
-  window.__WordCatcherShared = {
+  window.__WordPickerShared = {
     escapeHtml,
     sendMessage,
     createLogger,

@@ -1,5 +1,5 @@
 (() => {
-  const { escapeHtml, sendMessage, createLogger } = (window as any).__WordCatcherShared;
+  const { escapeHtml, sendMessage, createLogger } = (window as any).__WordPickerShared;
   const _logger = createLogger("content-script");
 
   const STATE = {
@@ -27,9 +27,9 @@
 
   const WORD_PATTERN = /[A-Za-z][A-Za-z'-]{1,44}/g;
   const EXCLUDED_SELECTOR = "input, textarea, [contenteditable='true'], [contenteditable=''], pre, code";
-  const CURSOR_STYLE_ID = "word-catcher-cursor-style";
-  const HIGHLIGHT_STYLE_ID = "word-catcher-highlight-style";
-  const HIGHLIGHT_NAME = "word-catcher-hover";
+  const CURSOR_STYLE_ID = "word-picker-cursor-style";
+  const HIGHLIGHT_STYLE_ID = "word-picker-highlight-style";
+  const HIGHLIGHT_NAME = "word-picker-hover";
   const POPUP_WIDTH = 320;
   const PEN_CURSOR_DATA_URL =
     "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath fill='%234472C4' d='M19.73 5.33a2 2 0 0 0-2.83 0l-1.42 1.42 4.24 4.24 1.42-1.42a2 2 0 0 0 0-2.83l-1.41-1.41Z'/%3E%3Cpath fill='%23FFFFFF' d='m14.07 8.1 4.24 4.24-8.84 8.84-4.98 1.13 1.13-4.98 8.45-8.45Z'/%3E%3Cpath fill='%231F2A44' d='m6.54 17.99 1.47-1.47 1.94 1.94-1.48 1.47-1.93.44.44-1.93Z'/%3E%3C/g%3E%3C/svg%3E";
@@ -121,7 +121,7 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         exitPenMode();
-        (window as any).__WordCatcherFireworks.clearFireworks();
+        (window as any).__WordPickerFireworks.clearFireworks();
       }
     });
   }
@@ -550,7 +550,7 @@
 
   function createPopupHost(): void {
     popupHost = document.createElement("div");
-    popupHost.id = "word-catcher-popup-host";
+    popupHost.id = "word-picker-popup-host";
     popupHost.style.position = "fixed";
     popupHost.style.inset = "0";
     popupHost.style.width = "100%";
@@ -715,7 +715,7 @@
 
       if (response.saved) {
         showToast("添加成功");
-        (window as any).__WordCatcherFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
+        (window as any).__WordPickerFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
         safeClosePopupAndReset();
         return;
       }
@@ -766,7 +766,7 @@
     }
 
     toastHost = document.createElement("div");
-    toastHost.id = "word-catcher-toast-host";
+    toastHost.id = "word-picker-toast-host";
     toastHost.style.position = "fixed";
     toastHost.style.left = "0";
     toastHost.style.top = "0";
@@ -938,7 +938,7 @@
 
     if (response.saved) {
       showToast("添加成功");
-      (window as any).__WordCatcherFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
+      (window as any).__WordPickerFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
       safeClosePopupAndReset();
       return;
     }
