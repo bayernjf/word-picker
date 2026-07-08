@@ -14,6 +14,7 @@
     "build:chrome": "npm run build:ts && node dist/scripts/build-cross-browser.js chrome",
     "build:safari": "npm run build:ts && node dist/scripts/build-cross-browser.js safari",
     "build:dict": "npm run build:ts && node dist/scripts/build-dict.js --limit=50000",
+    "generate:icons": "npm run build:ts && node dist/scripts/generate-icons.js",
     "pack": "node dist/scripts/pack.js all",
     "pack:chrome": "node dist/scripts/pack.js chrome",
     "pack:safari": "node dist/scripts/pack.js safari",
@@ -24,9 +25,11 @@
   "devDependencies": {
     "@eslint/js": "^9.13.0",
     "@types/node": "^26.0.1",
+    "@types/sharp": "^0.31.1",
     "@types/webextension-polyfill": "^0.12.5",
     "eslint": "^9.13.0",
     "globals": "^15.11.0",
+    "sharp": "^0.35.3",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.62.0",
     "vitest": "^2.1.3"
