@@ -40,16 +40,18 @@ function buildForBrowser(target: "chrome" | "safari"): void {
   // Copy compiled JS and static assets from dist/extension to dist/{target}
   copyDirContents(SRC, distDir);
 
+  // Copy polyfill and create ESM wrapper for module imports
+  setupPolyfillESM(distDir);
+
+  // Rewrite bare module specifier 'webextension-polyfill' to relative paths
+  rewritePolyfillImports(distDir);
+
   // Merge manifests
   const baseManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.base.json"), "utf-8"));
 
   let browserManifest: any;
   if (target === "safari") {
     browserManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.safari.json"), "utf-8"));
-    // Copy polyfill for Safari background page
-    if (fs.existsSync(POLYFILL_SRC)) {
-      fs.copyFileSync(POLYFILL_SRC, path.join(distDir, "browser-polyfill.js"));
-    }
     // Copy Safari background script (TS compiled to JS)
     const safariBgSrc = path.join(SRC, "service", "safari-background.js");
     if (fs.existsSync(safariBgSrc)) {
@@ -64,6 +66,42 @@ function buildForBrowser(target: "chrome" | "safari"): void {
   fs.writeFileSync(path.join(distDir, "manifest.json"), JSON.stringify(merged, null, 2));
 
   console.log(`[build-cross-browser] ${target} built → dist/${target}/`);
+}
+
+function setupPolyfillESM(distDir: string): void {
+  const polyfillDest = path.join(distDir, "browser-polyfill.js");
+  if (!fs.existsSync(POLYFILL_SRC)) {
+    console.error("[build-cross-browser] webextension-polyfill not found in node_modules");
+    process.exit(1);
+  }
+  fs.copyFileSync(POLYFILL_SRC, polyfillDest);
+
+  const wrapperDest = path.join(distDir, "browser-polyfill.mjs");
+  const wrapperContent = `import './browser-polyfill.js';\nconst browser = globalThis.browser;\nexport default browser;\n`;
+  fs.writeFileSync(wrapperDest, wrapperContent);
+  console.log("[build-cross-browser] polyfill ESM wrapper created");
+}
+
+function rewritePolyfillImports(distDir: string): void {
+  function walk(dir: string): void {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(fullPath);
+      } else if (entry.name.endsWith(".js") && !entry.name.startsWith("browser-polyfill")) {
+        const relative = path.relative(dir, path.join(distDir, "browser-polyfill.mjs"));
+        const importPath = relative.startsWith(".") ? relative : `./${relative}`;
+        let content = fs.readFileSync(fullPath, "utf-8");
+        if (content.includes("webextension-polyfill")) {
+          content = content.replace(/from ['"]webextension-polyfill['"]/g, `from '${importPath}'`);
+          fs.writeFileSync(fullPath, content);
+        }
+      }
+    }
+  }
+  walk(distDir);
+  console.log("[build-cross-browser] polyfill imports rewritten");
 }
 
 function copyDirContents(src: string, dest: string): void {

@@ -568,7 +568,9 @@
   function removeAllPopupContainers(): void {
     if (popupShadow) {
       popupShadow.querySelectorAll(".popup-container").forEach((node) => {
-        node.remove();
+        if (node.parentNode) {
+          node.remove();
+        }
       });
     }
     popupContainer = null;
