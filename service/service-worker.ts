@@ -783,10 +783,21 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } catch (error) {
-    logger.error('flushSyncQueue failed', { error: String(error) });
+    const msg = error instanceof Error ? error.message : String(error);
+    const isNetworkError =
+      msg === 'Failed to fetch' ||
+      msg.includes('NetworkError') ||
+      msg.includes('network') ||
+      msg.includes('timeout') ||
+      msg.includes('AbortError');
+    if (isNetworkError) {
+      logger.warn('flushSyncQueue skipped (network error)', { error: msg });
+    } else {
+      logger.error('flushSyncQueue failed', { error: msg });
+    }
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: msg,
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } finally {
