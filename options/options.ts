@@ -66,6 +66,9 @@ async function loadSettings(): Promise<void> {
     (form as SettingsFormElements).maxCacheSize.value = String(settings.maxCacheSize || 200);
     (form as SettingsFormElements).syncEnabled.checked = settings.syncEnabled !== false;
     (form as SettingsFormElements).rememberDevice7Days.checked = Boolean(settings.rememberDevice7Days);
+    if ((form as SettingsFormElements).syncBaseUrl) {
+      (form as SettingsFormElements).syncBaseUrl.value = settings.syncBaseUrl || DEFAULT_SYNC_BASE_URL;
+    }
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "加载设置失败");
   }
@@ -109,12 +112,12 @@ async function fillRememberedCredentials(): Promise<void> {
 async function handleAuthLogin(): Promise<void> {
   const email = String((form as SettingsFormElements).authEmail.value || "").trim().toLowerCase();
   const password = String((form as SettingsFormElements).authPassword.value || "");
-  const baseUrl = DEFAULT_SYNC_BASE_URL;
+  const baseUrl = String((form as SettingsFormElements).syncBaseUrl?.value || "").trim() || DEFAULT_SYNC_BASE_URL;
   if (!email || !password) {
     setStatus("请填写邮箱和密码");
     return;
   }
-  logger.debug('handleAuthLogin', { email });
+  logger.debug('handleAuthLogin', { email, baseUrl });
   try {
     setStatus("正在登录...");
     const response = await sendMessage({ type: "AUTH_LOGIN", email, password, baseUrl });
