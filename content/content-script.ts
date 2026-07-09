@@ -657,6 +657,15 @@
       <div class="popup-actions">
         <button class="btn-save" type="button">添加到单词本</button>
       </div>
+      <div class="popup-brand-bar">
+        <svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect x="2" y="2" width="5" height="10" rx="1" fill="#f59e0b"/>
+          <rect x="9" y="3" width="5" height="9" rx="1" fill="#fbbf24"/>
+          <rect x="5" y="5" width="6" height="5" rx="1.2" fill="#f97316"/>
+          <path d="M7 7h4M7 9h4M7 11h3" stroke="#fff" stroke-width="1" stroke-linecap="round"/>
+        </svg>
+        <span>WordPicker</span>
+      </div>
     `;
 
     container.addEventListener("focusout", (event) => {
@@ -1205,6 +1214,28 @@
     .btn-save:disabled {
       opacity: 0.75;
       cursor: default;
+    }
+
+    .popup-brand-bar {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid #313244;
+    }
+
+    .popup-brand-bar svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    .popup-brand-bar span {
+      font-size: 11px;
+      color: #a6adc8;
+      font-weight: 500;
+      letter-spacing: 0.2px;
     }
   `;
 
