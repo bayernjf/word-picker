@@ -54,6 +54,9 @@ jobs:
       - name: Build dictionary
         run: npm run build:dict
 
+      - name: Build extensions
+        run: npm run build
+
       - name: Pack all extensions
         run: npm run pack
 
