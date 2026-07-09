@@ -50,6 +50,7 @@
   let latestRequestToken = 0;
   let lookupKeyPressed = false;
   let isUpdatingPopup = false;
+  let isClosingPopup = false;
   let pendingPopupFocus = false;
   let wordHighlight: Highlight | null = null;
 
@@ -245,6 +246,7 @@
   }
 
   function closePopupAndReset(): void {
+    isClosingPopup = true;
     clearHoverTimer();
     clearKeydownPopupTimer();
     latestRequestToken += 1;
@@ -255,6 +257,7 @@
     currentState = STATE.IDLE;
     removeCursor();
     clearWordHighlight();
+    isClosingPopup = false;
   }
 
   function scheduleInitialLookupAfterKeydown(): void {
@@ -568,8 +571,12 @@
   function removeAllPopupContainers(): void {
     if (popupShadow) {
       popupShadow.querySelectorAll(".popup-container").forEach((node) => {
-        if (node.parentNode) {
-          node.remove();
+        try {
+          if (node.isConnected) {
+            node.remove();
+          }
+        } catch {
+          // node already removed
         }
       });
     }
@@ -670,7 +677,7 @@
 
     container.addEventListener("focusout", (event) => {
       window.setTimeout(() => {
-        if (isUpdatingPopup || !popupContainer) {
+        if (isUpdatingPopup || !popupContainer || isClosingPopup) {
           return;
         }
 
