@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS, WORD_BASE_APP_URL } from "../lib/constants.js";
+import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
 import type { Settings } from "../lib/storage.js";
 
@@ -66,6 +66,9 @@ async function loadSettings(): Promise<void> {
     (form as SettingsFormElements).maxCacheSize.value = String(settings.maxCacheSize || 200);
     (form as SettingsFormElements).syncEnabled.checked = settings.syncEnabled !== false;
     (form as SettingsFormElements).rememberDevice7Days.checked = Boolean(settings.rememberDevice7Days);
+    if ((form as SettingsFormElements).syncBaseUrl) {
+      (form as SettingsFormElements).syncBaseUrl!.value = settings.syncBaseUrl || DEFAULT_SYNC_BASE_URL;
+    }
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "加载设置失败");
   }
@@ -109,7 +112,6 @@ async function fillRememberedCredentials(): Promise<void> {
 async function handleAuthLogin(): Promise<void> {
   const email = String((form as SettingsFormElements).authEmail.value || "").trim().toLowerCase();
   const password = String((form as SettingsFormElements).authPassword.value || "");
-  const baseUrl = DEFAULT_SYNC_BASE_URL;
   if (!email || !password) {
     setStatus("请填写邮箱和密码");
     return;
@@ -117,7 +119,7 @@ async function handleAuthLogin(): Promise<void> {
   logger.debug('handleAuthLogin', { email });
   try {
     setStatus("正在登录...");
-    const response = await sendMessage({ type: "AUTH_LOGIN", email, password, baseUrl });
+    const response = await sendMessage({ type: "AUTH_LOGIN", email, password });
     if (response.ok) {
       logger.info('handleAuthLogin success');
       setStatus("登录成功，开始同步...");
@@ -134,12 +136,32 @@ async function handleAuthLogin(): Promise<void> {
 }
 
 async function handleAuthRegister(): Promise<void> {
-  // 在新标签页打开 word-base 的注册页面（带参数强制显示注册表单）
-  const registerUrl = `${WORD_BASE_APP_URL.replace(/\/+$/, "")}/?auth=register`;
+  const email = String((form as SettingsFormElements).authEmail.value || "").trim().toLowerCase();
+  const password = String((form as SettingsFormElements).authPassword.value || "");
+  if (!email || !password) {
+    setStatus("请填写邮箱和密码");
+    return;
+  }
+  logger.debug('handleAuthRegister', { email });
   try {
-    await browser.tabs.create({ url: registerUrl });
+    setStatus("正在注册...");
+    const response = await sendMessage({ type: "AUTH_REGISTER", email, password });
+    if (response.ok) {
+      if (response.needsEmailConfirmation) {
+        setStatus("注册成功，请查收验证邮件");
+      } else {
+        logger.info('handleAuthRegister success');
+        setStatus("注册成功，已自动登录并开始同步...");
+        await refreshAuthStatus();
+        await refreshSyncStatus();
+      }
+    } else {
+      logger.warn('handleAuthRegister failed', { error: response.error });
+      setStatus(`注册失败: ${response.error || "unknown"}`);
+    }
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "打开注册页面失败");
+    logger.error('handleAuthRegister error', error);
+    setStatus(error instanceof Error ? error.message : "注册失败");
   }
 }
 
