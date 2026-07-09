@@ -12,7 +12,7 @@
   type State = typeof STATE[keyof typeof STATE];
 
   interface Settings {
-    lookupKey: "Control" | "Command" | "Alt" | "Option";
+    lookupKey: "Control" | "Meta" | "Alt" | "Shift";
     hoverDelay: number;
     autoSpeak: boolean;
     fireworksEffect: "canvas" | "css" | "none";

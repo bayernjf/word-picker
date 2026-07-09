@@ -40,7 +40,7 @@ export interface Word {
 }
 
 export interface Settings {
-  lookupKey: "Control" | "Command" | "Alt" | "Option";
+  lookupKey: "Control" | "Meta" | "Alt" | "Shift";
   hoverDelay: number;
   translator: "free" | "fallback";
   useYoudaoDict: boolean;
