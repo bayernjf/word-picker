@@ -63,7 +63,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxCacheSize: 200,
   syncEnabled: true,
   rememberDevice7Days: false,
-  syncBaseUrl: "http://localhost:3001",
+  syncBaseUrl: "https://word-base.pages.dev",
   pairingCode: "",
   syncToken: "",
   fireworksEffect: "css",
