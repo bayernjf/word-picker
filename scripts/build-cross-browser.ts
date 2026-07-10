@@ -16,7 +16,6 @@ import { copyStaticAssets, copyPolyfill } from "./copy-static.js";
 const ROOT = process.cwd();
 const SRC = path.join(ROOT, "dist", "extension");
 const POLYFILL_SRC = path.join(ROOT, "node_modules", "webextension-polyfill", "dist", "browser-polyfill.js");
-const SUPABASE_SRC = path.join(ROOT, "node_modules", "@supabase", "supabase-js", "dist", "index.mjs");
 
 function deepMerge(target: any, source: any): any {
   const result = { ...target };
@@ -44,10 +43,7 @@ function buildForBrowser(target: "chrome" | "safari"): void {
   // Copy polyfill and create ESM wrapper for module imports
   setupPolyfillESM(distDir);
 
-  // Copy supabase-js for auth
-  setupSupabaseESM(distDir);
-
-  // Rewrite bare module specifier to relative paths
+  // Rewrite bare module specifier 'webextension-polyfill' to relative paths
   rewritePolyfillImports(distDir);
 
   // Merge manifests
@@ -86,16 +82,6 @@ function setupPolyfillESM(distDir: string): void {
   console.log("[build-cross-browser] polyfill ESM wrapper created");
 }
 
-function setupSupabaseESM(distDir: string): void {
-  const supabaseDest = path.join(distDir, "supabase-js.mjs");
-  if (!fs.existsSync(SUPABASE_SRC)) {
-    console.error("[build-cross-browser] @supabase/supabase-js not found in node_modules");
-    process.exit(1);
-  }
-  fs.copyFileSync(SUPABASE_SRC, supabaseDest);
-  console.log("[build-cross-browser] supabase-js copied");
-}
-
 function rewritePolyfillImports(distDir: string): void {
   function walk(dir: string): void {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -103,29 +89,19 @@ function rewritePolyfillImports(distDir: string): void {
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) {
         walk(fullPath);
-      } else if (entry.name.endsWith(".js") && !entry.name.startsWith("browser-polyfill") && !entry.name.startsWith("supabase-js")) {
-        const polyfillRelative = path.relative(dir, path.join(distDir, "browser-polyfill.mjs"));
-        const polyfillImportPath = polyfillRelative.startsWith(".") ? polyfillRelative : `./${polyfillRelative}`;
-        const supabaseRelative = path.relative(dir, path.join(distDir, "supabase-js.mjs"));
-        const supabaseImportPath = supabaseRelative.startsWith(".") ? supabaseRelative : `./${supabaseRelative}`;
+      } else if (entry.name.endsWith(".js") && !entry.name.startsWith("browser-polyfill")) {
+        const relative = path.relative(dir, path.join(distDir, "browser-polyfill.mjs"));
+        const importPath = relative.startsWith(".") ? relative : `./${relative}`;
         let content = fs.readFileSync(fullPath, "utf-8");
-        let changed = false;
         if (content.includes("webextension-polyfill")) {
-          content = content.replace(/from ['"]webextension-polyfill['"]/g, `from '${polyfillImportPath}'`);
-          changed = true;
-        }
-        if (content.includes("@supabase/supabase-js")) {
-          content = content.replace(/from ['"]@supabase\/supabase-js['"]/g, `from '${supabaseImportPath}'`);
-          changed = true;
-        }
-        if (changed) {
+          content = content.replace(/from ['"]webextension-polyfill['"]/g, `from '${importPath}'`);
           fs.writeFileSync(fullPath, content);
         }
       }
     }
   }
   walk(distDir);
-  console.log("[build-cross-browser] polyfill and supabase imports rewritten");
+  console.log("[build-cross-browser] polyfill imports rewritten");
 }
 
 function copyDirContents(src: string, dest: string): void {
