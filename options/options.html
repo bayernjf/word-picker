@@ -112,19 +112,7 @@
       <form id="settings-form">
         <div class="field">
           <label for="lookupKey">查词按键</label>
-          <select id="lookupKey" name="lookupKey">
-            <optgroup id="mac-group" label="Mac">
-              <option value="Control">Control</option>
-              <option value="Meta">Command</option>
-              <option value="Alt">Option</option>
-              <option value="Shift">Shift</option>
-            </optgroup>
-            <optgroup id="win-group" label="Windows">
-              <option value="Control">Ctrl</option>
-              <option value="Alt">Alt</option>
-              <option value="Shift">Shift</option>
-            </optgroup>
-          </select>
+          <select id="lookupKey" name="lookupKey"></select>
         </div>
 
         <div class="field">
@@ -162,16 +150,6 @@
         <div class="field">
           <label for="maxCacheSize">缓存条数上限</label>
           <input id="maxCacheSize" name="maxCacheSize" type="number" min="50" max="500" step="10" />
-        </div>
-
-        <div class="field checkbox">
-          <input id="syncEnabled" name="syncEnabled" type="checkbox" />
-          <label for="syncEnabled">同步到 word-base</label>
-        </div>
-
-        <div class="field">
-          <label for="syncBaseUrl">同步服务器地址</label>
-          <input id="syncBaseUrl" name="syncBaseUrl" type="url" placeholder="http://localhost:3001" />
         </div>
 
         <div id="auth-section">

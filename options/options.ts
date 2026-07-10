@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS } from "../lib/constants.js";
+import { SETTINGS_LIMITS } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
 import type { Settings } from "../lib/storage.js";
 
@@ -26,34 +26,35 @@ interface SettingsFormElements extends HTMLFormElement {
   autoSpeak: HTMLInputElement;
   fireworksEffect: HTMLSelectElement;
   maxCacheSize: HTMLInputElement;
-  syncEnabled: HTMLInputElement;
   rememberDevice7Days: HTMLInputElement;
-  syncBaseUrl?: HTMLInputElement;
   authEmail: HTMLInputElement;
   authPassword: HTMLInputElement;
 }
 
 const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
+const LOOKUP_KEY_OPTIONS = {
+  mac: [
+    { value: "Control", label: "Control" },
+    { value: "Meta", label: "Command" },
+    { value: "Alt", label: "Option" },
+    { value: "Shift", label: "Shift" },
+  ],
+  win: [
+    { value: "Control", label: "Ctrl" },
+    { value: "Alt", label: "Alt" },
+    { value: "Shift", label: "Shift" },
+  ],
+} as const;
+
+function getPlatformLookupKeyOptions() {
+  return isMac ? LOOKUP_KEY_OPTIONS.mac : LOOKUP_KEY_OPTIONS.win;
+}
+
 function initLookupKeySelect(): void {
-  const macGroup = document.getElementById("mac-group") as HTMLOptGroupElement;
-  const winGroup = document.getElementById("win-group") as HTMLOptGroupElement;
   const select = (form as SettingsFormElements).lookupKey;
-
-  if (isMac) {
-    macGroup.hidden = false;
-    winGroup.hidden = true;
-  } else {
-    macGroup.hidden = true;
-    winGroup.hidden = false;
-  }
-
-  const options = Array.from(select.options).filter(opt => !opt.parentElement?.hidden);
-  const currentValue = select.value;
-  const valueStillAvailable = options.some(opt => opt.value === currentValue);
-  if (!valueStillAvailable && options.length > 0) {
-    select.value = options[0].value;
-  }
+  const options = getPlatformLookupKeyOptions();
+  select.innerHTML = options.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join("");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -82,10 +83,7 @@ function getPlatformDefaultLookupKey(): string {
 }
 
 function isValidLookupKeyForPlatform(value: string): boolean {
-  if (isMac) {
-    return ["Control", "Meta", "Alt", "Shift"].includes(value);
-  }
-  return ["Control", "Alt", "Shift"].includes(value);
+  return getPlatformLookupKeyOptions().some(opt => opt.value === value);
 }
 
 async function loadSettings(): Promise<void> {
@@ -102,11 +100,7 @@ async function loadSettings(): Promise<void> {
     (form as SettingsFormElements).autoSpeak.checked = Boolean(settings.autoSpeak);
     (form as SettingsFormElements).fireworksEffect.value = settings.fireworksEffect || "css";
     (form as SettingsFormElements).maxCacheSize.value = String(settings.maxCacheSize || 200);
-    (form as SettingsFormElements).syncEnabled.checked = settings.syncEnabled !== false;
     (form as SettingsFormElements).rememberDevice7Days.checked = Boolean(settings.rememberDevice7Days);
-    if ((form as SettingsFormElements).syncBaseUrl) {
-      (form as SettingsFormElements).syncBaseUrl!.value = settings.syncBaseUrl || DEFAULT_SYNC_BASE_URL;
-    }
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "加载设置失败");
   }
@@ -243,9 +237,7 @@ async function handleSubmit(event: Event): Promise<void> {
     autoSpeak: (form as SettingsFormElements).autoSpeak.checked,
     fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as "canvas" | "css" | "none",
     maxCacheSize: clampNumber((form as SettingsFormElements).maxCacheSize.value, SETTINGS_LIMITS.CACHE_SIZE_MIN, SETTINGS_LIMITS.CACHE_SIZE_MAX, SETTINGS_LIMITS.CACHE_SIZE_DEFAULT),
-    syncEnabled: (form as SettingsFormElements).syncEnabled.checked,
     rememberDevice7Days: (form as SettingsFormElements).rememberDevice7Days.checked,
-    syncBaseUrl: String((form as SettingsFormElements).syncBaseUrl?.value || "").trim() || DEFAULT_SYNC_BASE_URL,
   };
 
   try {
