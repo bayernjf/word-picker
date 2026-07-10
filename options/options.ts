@@ -66,6 +66,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   authRegisterButton?.addEventListener("click", handleAuthRegister);
   authLogoutButton?.addEventListener("click", handleAuthLogout);
   rememberDeviceCheckbox?.addEventListener("change", handleRememberDeviceChange);
+  (form as SettingsFormElements).lookupKey.addEventListener("change", () => void autoSaveSetting("lookupKey"));
+  (form as SettingsFormElements).fireworksEffect.addEventListener("change", () => void autoSaveSetting("fireworksEffect"));
   await refreshAuthStatus();
   await refreshSyncStatus();
 
@@ -221,6 +223,35 @@ async function handleRememberDeviceChange(): Promise<void> {
     // 同步更新已登录态的过期时间
     await sendMessage({ type: "AUTH_SET_REMEMBER", remember });
     setStatus(remember ? "已开启在此设备记住7天" : "已关闭在此设备记住7天");
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "保存失败");
+  }
+}
+
+const SETTING_LABELS: Record<string, string> = {
+  lookupKey: "查词按键",
+  fireworksEffect: "添加单词特效",
+};
+
+async function autoSaveSetting(key: keyof Settings): Promise<void> {
+  try {
+    const response = await sendMessage({ type: "GET_SETTINGS" });
+    const current = response.settings || {};
+    const formEl = form as SettingsFormElements;
+    let value: any;
+    if (key === "lookupKey") {
+      value = formEl.lookupKey.value;
+    } else if (key === "fireworksEffect") {
+      value = formEl.fireworksEffect.value;
+    } else {
+      return;
+    }
+    await sendMessage({
+      type: "SAVE_SETTINGS",
+      settings: { ...current, [key]: value },
+    });
+    const label = SETTING_LABELS[key] || key;
+    setStatus(`${label}已保存`);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "保存失败");
   }
