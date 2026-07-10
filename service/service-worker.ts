@@ -28,7 +28,14 @@ import {
 import { DEFAULT_SYNC_BASE_URL, QUEUE_MAX_LENGTH } from '../lib/constants.js';
 import { MESSAGE_TYPES } from '../lib/messaging.js';
 import { createLogger } from '../lib/logger.js';
-import { getSupabase, getSupabaseSession } from '../lib/supabase.js';
+import {
+  setSupabaseSession,
+  getSupabaseSession,
+  signInWithPassword,
+  signUp,
+  refreshSession as supabaseRefreshSession,
+  signOut as supabaseSignOut,
+} from '../lib/supabase.js';
 import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
 
@@ -735,33 +742,15 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
   isSyncing = true;
 
   try {
-    const sb = getSupabase();
-    await sb.auth.setSession({
+    setSupabaseSession({
       access_token: auth.accessToken,
       refresh_token: auth.refreshToken,
+      user: auth.user?.id ? { id: auth.user.id, email: auth.user.email } : undefined,
     });
-    const { data: sessionData, error: sessionError } = await sb.auth.getSession();
 
-    if (sessionError || !sessionData.session) {
-      await setAuthData(null);
-      await setCurrentUserEmail(null);
-      return { ok: false, error: sessionError?.message || 'session_invalid', loggedOut: true, queueSize };
-    }
-
-    const currentToken = sessionData.session.access_token;
     const currentAuth: AuthData = {
-      accessToken: currentToken,
-      refreshToken: sessionData.session.refresh_token,
-      user: sessionData.session.user
-        ? { email: sessionData.session.user.email || undefined, id: sessionData.session.user.id }
-        : auth.user,
-      lastSyncAt: auth.lastSyncAt,
-      expiresAt: auth.expiresAt,
+      ...auth,
     };
-
-    if (currentToken !== auth.accessToken || sessionData.session.refresh_token !== auth.refreshToken) {
-      await setAuthData({ ...currentAuth, lastSyncAt: Date.now() });
-    }
 
     try {
       await pushDeletes(currentAuth, settings);
@@ -772,18 +761,18 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
         throw error;
       }
 
-      const { data: refreshData, error: refreshError } = await sb.auth.refreshSession();
-      if (refreshError || !refreshData.session) {
+      const { session: refreshedSession, error: refreshError } = await supabaseRefreshSession(auth.refreshToken);
+      if (refreshError || !refreshedSession) {
         await setAuthData(null);
         await setCurrentUserEmail(null);
         return { ok: false, error: refreshError?.message || 'token_refresh_failed', loggedOut: true, queueSize };
       }
 
       const refreshedAuth: AuthData = {
-        accessToken: refreshData.session.access_token,
-        refreshToken: refreshData.session.refresh_token,
-        user: refreshData.session.user
-          ? { email: refreshData.session.user.email || undefined, id: refreshData.session.user.id }
+        accessToken: refreshedSession.access_token,
+        refreshToken: refreshedSession.refresh_token,
+        user: refreshedSession.user
+          ? { email: refreshedSession.user.email || undefined, id: refreshedSession.user.id }
           : currentAuth.user,
         lastSyncAt: currentAuth.lastSyncAt,
         expiresAt: currentAuth.expiresAt,
@@ -795,12 +784,12 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
       await pullChanges(refreshedAuth, settings);
     }
 
-    const finalSession = await getSupabaseSession();
+    const finalSession = getSupabaseSession();
     if (finalSession) {
       await setAuthData({
-        accessToken: finalSession.accessToken,
-        refreshToken: finalSession.refreshToken,
-        user: finalSession.user,
+        accessToken: finalSession.access_token,
+        refreshToken: finalSession.refresh_token,
+        user: finalSession.user ? { email: finalSession.user.email, id: finalSession.user.id } : undefined,
         lastSyncAt: Date.now(),
         expiresAt: auth.expiresAt,
       });
@@ -965,16 +954,14 @@ async function clearUserData(): Promise<void> {
 }
 
 async function handleAuthLogin(email: string, password: string): Promise<any> {
-  const sb = getSupabase();
-  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  const { session, error } = await signInWithPassword(email, password);
 
-  if (error || !data.session) {
+  if (error || !session) {
     return { ok: false, error: error?.message || 'login_failed' };
   }
 
-  const session = data.session;
   const previousEmail = await getCurrentUserEmail();
-  const newEmail = session.user.email || email;
+  const newEmail = session.user?.email || email;
 
   if (previousEmail && previousEmail !== newEmail) {
     await clearUserData();
@@ -985,7 +972,7 @@ async function handleAuthLogin(email: string, password: string): Promise<any> {
   await setAuthData({
     accessToken: session.access_token,
     refreshToken: session.refresh_token,
-    user: { email: newEmail, id: session.user.id },
+    user: { email: newEmail, id: session.user?.id || '' },
     lastSyncAt: Date.now(),
     expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
   });
@@ -995,32 +982,30 @@ async function handleAuthLogin(email: string, password: string): Promise<any> {
 
   return {
     ok: true,
-    user: { email: newEmail, id: session.user.id },
+    user: { email: newEmail, id: session.user?.id || '' },
     accessToken: session.access_token,
   };
 }
 
 async function handleAuthRegister(email: string, password: string): Promise<any> {
-  const sb = getSupabase();
-  const { data, error } = await sb.auth.signUp({ email, password });
+  const { session, user, error, needsEmailConfirmation } = await signUp(email, password);
 
   if (error) {
     return { ok: false, error: error.message };
   }
 
-  if (!data.session) {
-    return { ok: true, needsEmailConfirmation: true, user: data.user ? { email } : null };
+  if (needsEmailConfirmation || !session) {
+    return { ok: true, needsEmailConfirmation: true, user: user ? { email } : null };
   }
 
-  const session = data.session;
-  const newEmail = session.user.email || email;
+  const newEmail = session.user?.email || email;
 
   await setCurrentUserEmail(newEmail);
   const settings = await getSettings();
   await setAuthData({
     accessToken: session.access_token,
     refreshToken: session.refresh_token,
-    user: { email: newEmail, id: session.user.id },
+    user: { email: newEmail, id: session.user?.id || '' },
     lastSyncAt: Date.now(),
     expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
   });
@@ -1030,7 +1015,7 @@ async function handleAuthRegister(email: string, password: string): Promise<any>
 
   return {
     ok: true,
-    user: { email: newEmail, id: session.user.id },
+    user: { email: newEmail, id: session.user?.id || '' },
     accessToken: session.access_token,
   };
 }
