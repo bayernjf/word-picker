@@ -22,7 +22,7 @@
     lookupKey: "Control",
     hoverDelay: 100,
     autoSpeak: false,
-    fireworksEffect: "css",
+    fireworksEffect: "canvas",
   };
 
   const WORD_PATTERN = /[A-Za-z][A-Za-z'-]{1,44}/g;
