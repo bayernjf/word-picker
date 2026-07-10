@@ -66,7 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   syncBaseUrl: "https://word-base.pages.dev",
   pairingCode: "",
   syncToken: "",
-  fireworksEffect: "css",
+  fireworksEffect: "canvas",
 };
 
 const STORAGE_KEYS = {
