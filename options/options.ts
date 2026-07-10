@@ -33,7 +33,31 @@ interface SettingsFormElements extends HTMLFormElement {
   authPassword: HTMLInputElement;
 }
 
+const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+function initLookupKeySelect(): void {
+  const macGroup = document.getElementById("mac-group") as HTMLOptGroupElement;
+  const winGroup = document.getElementById("win-group") as HTMLOptGroupElement;
+  const select = (form as SettingsFormElements).lookupKey;
+
+  if (isMac) {
+    macGroup.hidden = false;
+    winGroup.hidden = true;
+  } else {
+    macGroup.hidden = true;
+    winGroup.hidden = false;
+  }
+
+  const options = Array.from(select.options).filter(opt => !opt.parentElement?.hidden);
+  const currentValue = select.value;
+  const valueStillAvailable = options.some(opt => opt.value === currentValue);
+  if (!valueStillAvailable && options.length > 0) {
+    select.value = options[0].value;
+  }
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  initLookupKeySelect();
   await loadSettings();
   form.addEventListener("submit", handleSubmit);
   syncNowButton?.addEventListener("click", handleSyncNow);
@@ -53,11 +77,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 });
 
+function getPlatformDefaultLookupKey(): string {
+  return "Control";
+}
+
+function isValidLookupKeyForPlatform(value: string): boolean {
+  if (isMac) {
+    return ["Control", "Meta", "Alt", "Shift"].includes(value);
+  }
+  return ["Control", "Alt", "Shift"].includes(value);
+}
+
 async function loadSettings(): Promise<void> {
   try {
     const response = await sendMessage({ type: "GET_SETTINGS" });
     const settings: Partial<Settings> = response.settings || {};
-    (form as SettingsFormElements).lookupKey.value = settings.lookupKey || "Control";
+    const savedKey = settings.lookupKey || getPlatformDefaultLookupKey();
+    (form as SettingsFormElements).lookupKey.value = isValidLookupKeyForPlatform(savedKey)
+      ? savedKey
+      : getPlatformDefaultLookupKey();
     (form as SettingsFormElements).hoverDelay.value = String(settings.hoverDelay || 100);
     (form as SettingsFormElements).translator.value = settings.translator || "free";
     (form as SettingsFormElements).useYoudaoDict.checked = settings.useYoudaoDict !== false;
