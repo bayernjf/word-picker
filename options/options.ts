@@ -35,25 +35,28 @@ interface SettingsFormElements extends HTMLFormElement {
 
 const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
 
+const LOOKUP_KEY_OPTIONS = {
+  mac: [
+    { value: "Control", label: "Control" },
+    { value: "Meta", label: "Command" },
+    { value: "Alt", label: "Option" },
+    { value: "Shift", label: "Shift" },
+  ],
+  win: [
+    { value: "Control", label: "Ctrl" },
+    { value: "Alt", label: "Alt" },
+    { value: "Shift", label: "Shift" },
+  ],
+} as const;
+
+function getPlatformLookupKeyOptions() {
+  return isMac ? LOOKUP_KEY_OPTIONS.mac : LOOKUP_KEY_OPTIONS.win;
+}
+
 function initLookupKeySelect(): void {
-  const macGroup = document.getElementById("mac-group") as HTMLOptGroupElement;
-  const winGroup = document.getElementById("win-group") as HTMLOptGroupElement;
   const select = (form as SettingsFormElements).lookupKey;
-
-  if (isMac) {
-    macGroup.hidden = false;
-    winGroup.hidden = true;
-  } else {
-    macGroup.hidden = true;
-    winGroup.hidden = false;
-  }
-
-  const options = Array.from(select.options).filter(opt => !opt.parentElement?.hidden);
-  const currentValue = select.value;
-  const valueStillAvailable = options.some(opt => opt.value === currentValue);
-  if (!valueStillAvailable && options.length > 0) {
-    select.value = options[0].value;
-  }
+  const options = getPlatformLookupKeyOptions();
+  select.innerHTML = options.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join("");
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -82,10 +85,7 @@ function getPlatformDefaultLookupKey(): string {
 }
 
 function isValidLookupKeyForPlatform(value: string): boolean {
-  if (isMac) {
-    return ["Control", "Meta", "Alt", "Shift"].includes(value);
-  }
-  return ["Control", "Alt", "Shift"].includes(value);
+  return getPlatformLookupKeyOptions().some(opt => opt.value === value);
 }
 
 async function loadSettings(): Promise<void> {
