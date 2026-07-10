@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS } from "../lib/constants.js";
+import { SETTINGS_LIMITS } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
 import type { Settings } from "../lib/storage.js";
 
@@ -26,9 +26,7 @@ interface SettingsFormElements extends HTMLFormElement {
   autoSpeak: HTMLInputElement;
   fireworksEffect: HTMLSelectElement;
   maxCacheSize: HTMLInputElement;
-  syncEnabled: HTMLInputElement;
   rememberDevice7Days: HTMLInputElement;
-  syncBaseUrl?: HTMLInputElement;
   authEmail: HTMLInputElement;
   authPassword: HTMLInputElement;
 }
@@ -102,11 +100,7 @@ async function loadSettings(): Promise<void> {
     (form as SettingsFormElements).autoSpeak.checked = Boolean(settings.autoSpeak);
     (form as SettingsFormElements).fireworksEffect.value = settings.fireworksEffect || "css";
     (form as SettingsFormElements).maxCacheSize.value = String(settings.maxCacheSize || 200);
-    (form as SettingsFormElements).syncEnabled.checked = settings.syncEnabled !== false;
     (form as SettingsFormElements).rememberDevice7Days.checked = Boolean(settings.rememberDevice7Days);
-    if ((form as SettingsFormElements).syncBaseUrl) {
-      (form as SettingsFormElements).syncBaseUrl!.value = settings.syncBaseUrl || DEFAULT_SYNC_BASE_URL;
-    }
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "加载设置失败");
   }
@@ -243,9 +237,7 @@ async function handleSubmit(event: Event): Promise<void> {
     autoSpeak: (form as SettingsFormElements).autoSpeak.checked,
     fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as "canvas" | "css" | "none",
     maxCacheSize: clampNumber((form as SettingsFormElements).maxCacheSize.value, SETTINGS_LIMITS.CACHE_SIZE_MIN, SETTINGS_LIMITS.CACHE_SIZE_MAX, SETTINGS_LIMITS.CACHE_SIZE_DEFAULT),
-    syncEnabled: (form as SettingsFormElements).syncEnabled.checked,
     rememberDevice7Days: (form as SettingsFormElements).rememberDevice7Days.checked,
-    syncBaseUrl: String((form as SettingsFormElements).syncBaseUrl?.value || "").trim() || DEFAULT_SYNC_BASE_URL,
   };
 
   try {
