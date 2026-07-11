@@ -656,7 +656,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     }
   }
 
-  let serverWordsMap = new Map<string, { level: string; familiarity: number }>();
+  const serverWordsMap = new Map<string, { level: string; familiarity: number; syncVersion: number }>();
   try {
     const wordsRes = await fetch(`${baseUrl}/api/v1/words`, {
       headers: { Authorization: `Bearer ${auth.accessToken}` },
@@ -669,6 +669,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
           serverWordsMap.set(key, {
             level: word.level || 'B2',
             familiarity: Number(word.familiarity) || 0,
+            syncVersion: Number(word.sync_version) || 0,
           });
         });
       }
@@ -689,6 +690,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
       if (existingSrs) {
         mapped.level = existingSrs.level;
         mapped.familiarity = existingSrs.familiarity;
+        (mapped as any).sync_version = existingSrs.syncVersion;
       }
       return mapped;
     })
