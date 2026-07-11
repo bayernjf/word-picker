@@ -16,8 +16,13 @@ export interface MessageResponse {
   [key: string]: unknown;
 }
 
-export function sendMessage<TResponse extends { success: boolean; error?: string } = MessageResponse>(message: object): Promise<TResponse> {
-  return browser.runtime.sendMessage(message).then((response) => {
+export function sendMessage<TResponse extends { success: boolean; error?: string } = MessageResponse>(message: object, timeoutMs: number = 5000): Promise<TResponse> {
+  return Promise.race([
+    browser.runtime.sendMessage(message),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`消息发送超时（${timeoutMs}ms）`)), timeoutMs)
+    ),
+  ]).then((response) => {
     const res = response as TResponse;
     if (!res?.success) {
       throw new Error(res?.error || "扩展消息请求失败");
