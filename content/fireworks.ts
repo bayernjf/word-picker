@@ -2,27 +2,31 @@
   const FIREWORKS_CSS = `
     .fw-particle {
       position: fixed;
+      left: 0;
+      top: 0;
+      width: 6px;
+      height: 6px;
+      margin-left: -3px;
+      margin-top: -3px;
       border-radius: 50%;
       background: var(--color);
-      box-shadow: 0 0 6px var(--color);
-      transform: translate(-50%, -50%) rotate(0deg);
-      animation-name: fw-burst;
-      animation-timing-function: cubic-bezier(0.15, 0.6, 0.35, 1);
-      animation-fill-mode: forwards;
+      box-shadow: 0 0 8px 2px var(--color);
+      animation: fw-burst 900ms cubic-bezier(0.15, 0.6, 0.35, 1) forwards;
       pointer-events: none;
+      will-change: transform, opacity;
     }
 
     @keyframes fw-burst {
       0% {
         opacity: 1;
-        transform: translate(-50%, -50%) rotate(0deg) scale(1);
+        transform: translate(var(--sx), var(--sy)) scale(1);
       }
       70% {
         opacity: 1;
       }
       100% {
         opacity: 0;
-        transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)) scale(0.4);
+        transform: translate(var(--ex), var(--ey)) scale(0.3);
       }
     }
   `;
@@ -68,26 +72,27 @@
     }
 
     const PARTICLE_COUNT = 56;
+    const frag = document.createDocumentFragment();
     for (let i = 0; i < PARTICLE_COUNT; i++) {
       const particle = document.createElement("span");
       particle.className = "fw-particle";
-      const angle = (Math.PI * 2 * i) / PARTICLE_COUNT + Math.random() * 0.4;
-      const distance = 60 + Math.random() * 70;
+      const angle = (Math.PI * 2 * i) / PARTICLE_COUNT + (Math.random() - 0.5) * 0.6;
+      const distance = 60 + Math.random() * 80;
       const dx = Math.cos(angle) * distance;
-      const dy = Math.sin(angle) * distance;
+      const dy = Math.sin(angle) * distance + 30;
       const size = 5 + Math.random() * 5;
-      particle.style.setProperty("--dx", `${dx}px`);
-      particle.style.setProperty("--dy", `${dy + 40}px`);
+      particle.style.setProperty("--sx", `${x}px`);
+      particle.style.setProperty("--sy", `${y}px`);
+      particle.style.setProperty("--ex", `${x + dx}px`);
+      particle.style.setProperty("--ey", `${y + dy}px`);
       particle.style.setProperty("--color", pickColor());
-      particle.style.setProperty("--rot", `${Math.random() * 360}deg`);
       particle.style.width = `${size}px`;
       particle.style.height = `${size}px`;
-      particle.style.left = `${x}px`;
-      particle.style.top = `${y}px`;
-      particle.style.animationDuration = `${700 + Math.random() * 400}ms`;
+      particle.style.animationDuration = `${700 + Math.random() * 500}ms`;
       particle.addEventListener("animationend", () => particle.remove(), { once: true });
-      shadow.appendChild(particle);
+      frag.appendChild(particle);
     }
+    shadow.appendChild(frag);
   }
 
   function launchCanvasFireworks(x: number, y: number): void {

@@ -1,6 +1,6 @@
 import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { DEFAULT_SYNC_BASE_URL, SETTINGS_LIMITS, WORD_BASE_APP_URL } from "../lib/constants.js";
+import { SETTINGS_LIMITS } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
 import type { Settings } from "../lib/storage.js";
 
@@ -26,14 +26,39 @@ interface SettingsFormElements extends HTMLFormElement {
   autoSpeak: HTMLInputElement;
   fireworksEffect: HTMLSelectElement;
   maxCacheSize: HTMLInputElement;
-  syncEnabled: HTMLInputElement;
   rememberDevice7Days: HTMLInputElement;
-  syncBaseUrl?: HTMLInputElement;
   authEmail: HTMLInputElement;
   authPassword: HTMLInputElement;
 }
 
+const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+
+const LOOKUP_KEY_OPTIONS = {
+  mac: [
+    { value: "Control", label: "Control" },
+    { value: "Meta", label: "Command" },
+    { value: "Alt", label: "Option" },
+    { value: "Shift", label: "Shift" },
+  ],
+  win: [
+    { value: "Control", label: "Ctrl" },
+    { value: "Alt", label: "Alt" },
+    { value: "Shift", label: "Shift" },
+  ],
+} as const;
+
+function getPlatformLookupKeyOptions() {
+  return isMac ? LOOKUP_KEY_OPTIONS.mac : LOOKUP_KEY_OPTIONS.win;
+}
+
+function initLookupKeySelect(): void {
+  const select = (form as SettingsFormElements).lookupKey;
+  const options = getPlatformLookupKeyOptions();
+  select.innerHTML = options.map(opt => `<option value="${opt.value}">${opt.label}</option>`).join("");
+}
+
 document.addEventListener("DOMContentLoaded", async () => {
+  initLookupKeySelect();
   await loadSettings();
   form.addEventListener("submit", handleSubmit);
   syncNowButton?.addEventListener("click", handleSyncNow);
@@ -41,6 +66,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   authRegisterButton?.addEventListener("click", handleAuthRegister);
   authLogoutButton?.addEventListener("click", handleAuthLogout);
   rememberDeviceCheckbox?.addEventListener("change", handleRememberDeviceChange);
+  (form as SettingsFormElements).lookupKey.addEventListener("change", () => void autoSaveSetting("lookupKey"));
+  (form as SettingsFormElements).fireworksEffect.addEventListener("change", () => void autoSaveSetting("fireworksEffect"));
   await refreshAuthStatus();
   await refreshSyncStatus();
 
@@ -53,18 +80,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 });
 
+function getPlatformDefaultLookupKey(): string {
+  return "Control";
+}
+
+function isValidLookupKeyForPlatform(value: string): boolean {
+  return getPlatformLookupKeyOptions().some(opt => opt.value === value);
+}
+
 async function loadSettings(): Promise<void> {
   try {
     const response = await sendMessage({ type: "GET_SETTINGS" });
     const settings: Partial<Settings> = response.settings || {};
-    (form as SettingsFormElements).lookupKey.value = settings.lookupKey || "Control";
+    const savedKey = settings.lookupKey || getPlatformDefaultLookupKey();
+    (form as SettingsFormElements).lookupKey.value = isValidLookupKeyForPlatform(savedKey)
+      ? savedKey
+      : getPlatformDefaultLookupKey();
     (form as SettingsFormElements).hoverDelay.value = String(settings.hoverDelay || 100);
     (form as SettingsFormElements).translator.value = settings.translator || "free";
     (form as SettingsFormElements).useYoudaoDict.checked = settings.useYoudaoDict !== false;
     (form as SettingsFormElements).autoSpeak.checked = Boolean(settings.autoSpeak);
     (form as SettingsFormElements).fireworksEffect.value = settings.fireworksEffect || "css";
     (form as SettingsFormElements).maxCacheSize.value = String(settings.maxCacheSize || 200);
-    (form as SettingsFormElements).syncEnabled.checked = settings.syncEnabled !== false;
     (form as SettingsFormElements).rememberDevice7Days.checked = Boolean(settings.rememberDevice7Days);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "加载设置失败");
@@ -109,7 +146,6 @@ async function fillRememberedCredentials(): Promise<void> {
 async function handleAuthLogin(): Promise<void> {
   const email = String((form as SettingsFormElements).authEmail.value || "").trim().toLowerCase();
   const password = String((form as SettingsFormElements).authPassword.value || "");
-  const baseUrl = DEFAULT_SYNC_BASE_URL;
   if (!email || !password) {
     setStatus("请填写邮箱和密码");
     return;
@@ -117,7 +153,7 @@ async function handleAuthLogin(): Promise<void> {
   logger.debug('handleAuthLogin', { email });
   try {
     setStatus("正在登录...");
-    const response = await sendMessage({ type: "AUTH_LOGIN", email, password, baseUrl });
+    const response = await sendMessage({ type: "AUTH_LOGIN", email, password });
     if (response.ok) {
       logger.info('handleAuthLogin success');
       setStatus("登录成功，开始同步...");
@@ -134,12 +170,32 @@ async function handleAuthLogin(): Promise<void> {
 }
 
 async function handleAuthRegister(): Promise<void> {
-  // 在新标签页打开 word-base 的注册页面（带参数强制显示注册表单）
-  const registerUrl = `${WORD_BASE_APP_URL.replace(/\/+$/, "")}/?auth=register`;
+  const email = String((form as SettingsFormElements).authEmail.value || "").trim().toLowerCase();
+  const password = String((form as SettingsFormElements).authPassword.value || "");
+  if (!email || !password) {
+    setStatus("请填写邮箱和密码");
+    return;
+  }
+  logger.debug('handleAuthRegister', { email });
   try {
-    await browser.tabs.create({ url: registerUrl });
+    setStatus("正在注册...");
+    const response = await sendMessage({ type: "AUTH_REGISTER", email, password });
+    if (response.ok) {
+      if (response.needsEmailConfirmation) {
+        setStatus("注册成功，请查收验证邮件");
+      } else {
+        logger.info('handleAuthRegister success');
+        setStatus("注册成功，已自动登录并开始同步...");
+        await refreshAuthStatus();
+        await refreshSyncStatus();
+      }
+    } else {
+      logger.warn('handleAuthRegister failed', { error: response.error });
+      setStatus(`注册失败: ${response.error || "unknown"}`);
+    }
   } catch (error) {
-    setStatus(error instanceof Error ? error.message : "打开注册页面失败");
+    logger.error('handleAuthRegister error', error);
+    setStatus(error instanceof Error ? error.message : "注册失败");
   }
 }
 
@@ -172,6 +228,35 @@ async function handleRememberDeviceChange(): Promise<void> {
   }
 }
 
+const SETTING_LABELS: Record<string, string> = {
+  lookupKey: "查词按键",
+  fireworksEffect: "添加单词特效",
+};
+
+async function autoSaveSetting(key: keyof Settings): Promise<void> {
+  try {
+    const response = await sendMessage({ type: "GET_SETTINGS" });
+    const current = response.settings || {};
+    const formEl = form as SettingsFormElements;
+    let value: any;
+    if (key === "lookupKey") {
+      value = formEl.lookupKey.value;
+    } else if (key === "fireworksEffect") {
+      value = formEl.fireworksEffect.value;
+    } else {
+      return;
+    }
+    await sendMessage({
+      type: "SAVE_SETTINGS",
+      settings: { ...current, [key]: value },
+    });
+    const label = SETTING_LABELS[key] || key;
+    setStatus(`${label}已保存`);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "保存失败");
+  }
+}
+
 async function handleSubmit(event: Event): Promise<void> {
   event.preventDefault();
 
@@ -183,9 +268,7 @@ async function handleSubmit(event: Event): Promise<void> {
     autoSpeak: (form as SettingsFormElements).autoSpeak.checked,
     fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as "canvas" | "css" | "none",
     maxCacheSize: clampNumber((form as SettingsFormElements).maxCacheSize.value, SETTINGS_LIMITS.CACHE_SIZE_MIN, SETTINGS_LIMITS.CACHE_SIZE_MAX, SETTINGS_LIMITS.CACHE_SIZE_DEFAULT),
-    syncEnabled: (form as SettingsFormElements).syncEnabled.checked,
     rememberDevice7Days: (form as SettingsFormElements).rememberDevice7Days.checked,
-    syncBaseUrl: String((form as SettingsFormElements).syncBaseUrl?.value || "").trim() || DEFAULT_SYNC_BASE_URL,
   };
 
   try {

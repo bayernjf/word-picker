@@ -15,9 +15,29 @@
 
 1. 打开 `chrome://extensions/`
 2. 开启开发者模式
-3. 选择“加载已解压的扩展程序”
+3. 选择"加载已解压的扩展程序"
 4. 选择当前项目目录
 5. 默认即使用免费公开接口，无需额外填写 `App Key` 或 `App Secret`
+
+## 离线词库
+
+项目内置 `data/ecdict.mini.csv`（基于 [ECDICT](https://github.com/skywind3000/ECDICT) 开源词库，MIT 协议），包含按词频排序的 Top 100k 词条，满足日常构建需求。
+
+### 构建词库
+
+```bash
+npm run build:dict
+```
+
+默认使用仓库内置的 `data/ecdict.mini.csv`，生成 `assets/dict/ecdict.min.json`。
+
+### 更新词库到最新版本
+
+如需使用 ECDICT 上游最新数据重建词库：
+
+1. 从 [ECDICT Releases](https://github.com/skywind3000/ECDICT/releases) 下载完整版 CSV
+2. 重命名为 `ecdict.csv` 放到 `data/` 目录（该文件已在 `.gitignore` 中排除，不会入库）
+3. 执行 `npm run build:dict`，脚本会自动优先使用完整版 `ecdict.csv`
 
 ## 目录
 
@@ -27,4 +47,5 @@
 - `popup/`：单词本 Popup 页面
 - `options/`：设置页
 - `lib/`：共享存储、缓存与翻译逻辑
+- `data/`：离线词库 CSV 原料（`ecdict.mini.csv` 入库，`ecdict.csv` 本地排除）
 - `tests/`：手动测试清单

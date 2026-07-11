@@ -94,29 +94,30 @@
   </head>
   <body>
     <main>
-      <div style="display:flex;align-items:center;gap:14px;margin-bottom:24px;">
-        <div style="width:88px;height:88px;border-radius:22px;background:#fffbeb;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(251,146,60,0.15);border:1px solid #fef3c7;">
-          <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:68px;height:68px;">
-            <rect x="34" y="6" width="22" height="52" rx="3.5" fill="#fde68a"/>
-            <rect x="8" y="4" width="22" height="54" rx="3.5" fill="#fbbf24"/>
-            <rect x="19" y="10" width="26" height="40" rx="4" fill="#f97316"/>
-            <path d="M24 21h16M24 29h16M24 37h12M24 45h9" stroke="#fff" stroke-width="2.2" stroke-linecap="round" opacity="0.95"/>
-          </svg>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:24px;">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <div style="width:88px;height:88px;border-radius:22px;background:#fffbeb;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 20px rgba(251,146,60,0.15);border:1px solid #fef3c7;">
+            <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:68px;height:68px;">
+              <rect x="34" y="6" width="22" height="52" rx="3.5" fill="#fde68a"/>
+              <rect x="8" y="4" width="22" height="54" rx="3.5" fill="#fbbf24"/>
+              <rect x="19" y="10" width="26" height="40" rx="4" fill="#f97316"/>
+              <path d="M24 21h16M24 29h16M24 37h12M24 45h9" stroke="#fff" stroke-width="2.2" stroke-linecap="round" opacity="0.95"/>
+            </svg>
+          </div>
+          <div>
+            <h1 style="margin:0;font-size:22px;">WordPicker 设置</h1>
+            <p style="margin:4px 0 0;color:#8b949e;">自定义查词快捷键、悬停时间和免费翻译接口配置。</p>
+          </div>
         </div>
-        <div>
-          <h1 style="margin:0;font-size:22px;">WordPicker 设置</h1>
-          <p style="margin:4px 0 0;color:#8b949e;">自定义查词快捷键、悬停时间和免费翻译接口配置。</p>
-        </div>
+        <a href="https://word-base.pages.dev/app" target="_blank" rel="noopener noreferrer" style="display:flex;align-items:center;text-decoration:none;">
+          <img src="../assets/wordbase-logo-full.svg" alt="WordBase" style="height:132px;" />
+        </a>
       </div>
 
       <form id="settings-form">
         <div class="field">
           <label for="lookupKey">查词按键</label>
-          <select id="lookupKey" name="lookupKey">
-            <option value="Control">Control</option>
-            <option value="Alt">Alt</option>
-            <option value="Shift">Shift</option>
-          </select>
+          <select id="lookupKey" name="lookupKey"></select>
         </div>
 
         <div class="field">
@@ -143,10 +144,10 @@
         </div>
 
         <div class="field">
-          <label for="fireworksEffect">添加单词效果</label>
+          <label for="fireworksEffect">添加单词后的特效</label>
           <select id="fireworksEffect" name="fireworksEffect">
-            <option value="css">粒子</option>
             <option value="canvas">烟花</option>
+            <option value="css">粒子</option>
             <option value="none">关闭</option>
           </select>
         </div>
@@ -154,11 +155,6 @@
         <div class="field">
           <label for="maxCacheSize">缓存条数上限</label>
           <input id="maxCacheSize" name="maxCacheSize" type="number" min="50" max="500" step="10" />
-        </div>
-
-        <div class="field checkbox">
-          <input id="syncEnabled" name="syncEnabled" type="checkbox" />
-          <label for="syncEnabled">同步到 word-base</label>
         </div>
 
         <div id="auth-section">

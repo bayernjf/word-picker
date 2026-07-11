@@ -25,7 +25,7 @@
 
 | 功能点 | 状态 | 说明 |
 |---|---|---|
-| 按住 Ctrl/Cmd 悬停查词 | ✅ | content-script 状态机（IDLE/PEN/LOADING/SHOWING）完整 |
+| 默认 Ctrl 悬停查词 | ✅ | content-script 状态机（IDLE/PEN/LOADING/SHOWING）完整 |
 | Shadow DOM 弹窗隔离 | ✅ | `attachShadow` 防样式污染，`z-index` 拉满 |
 | 弹窗定位 / 跟随 / 置顶 / ESC 关闭 | ✅ | 视口边界处理、滚动重定位都有 |
 | 笔形光标、单词高亮 | ✅ | 自定义 SVG cursor |

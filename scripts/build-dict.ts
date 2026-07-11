@@ -1,8 +1,11 @@
 /**
  * ECDICT mini 词库预处理脚本
  *
- * 用途：把下载的 data/ecdict.mini.csv 清洗、裁剪后，生成可直接打包进插件的
+ * 用途：把 data/ecdict.mini.csv 清洗、裁剪后，生成可直接打包进插件的
  *       离线词库资产 assets/dict/ecdict.min.json。
+ *
+ * 优先使用完整版 ecdict.csv（如需更新词库到最新版本，下载完整版放到 data/ 后重新构建），
+ * 回退到仓库内置的 ecdict.mini.csv（top 100k by frequency，满足日常构建需求）。
  *
  * 运行：node scripts/build-dict.js [--limit=50000] [--require-frq]
  *   --limit=N      最多保留 N 条（按词频从高到低），默认不限制
@@ -18,7 +21,7 @@ import path from "node:path";
 
 const ROOT = process.cwd();
 const DATA_DIR = path.join(ROOT, "data");
-// 优先用完整版 ecdict.csv，回退到样例 ecdict.mini.csv
+// 优先用完整版 ecdict.csv（更新词库时使用），回退到仓库内置的 ecdict.mini.csv
 const INPUT_CSV = [
   path.join(DATA_DIR, "ecdict.csv"),
   path.join(DATA_DIR, "ecdict.mini.csv"),
@@ -127,7 +130,8 @@ const args = parseArgs(process.argv);
 
 if (!fs.existsSync(INPUT_CSV)) {
   console.error(`[build-dict] 未找到输入文件：${INPUT_CSV}`);
-  console.error("请先下载 ecdict.mini.csv 放到 data/ 目录后重试。");
+  console.error("仓库应包含 data/ecdict.mini.csv，请检查 git 状态。");
+  console.error("如需更新词库到最新版本，请下载完整版 ecdict.csv 放到 data/ 目录后重试。");
   process.exit(1);
 }
 

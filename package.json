@@ -1,7 +1,7 @@
 {
   "name": "wordpicker",
   "version": "1.0.0",
-  "description": "按住 Ctrl/Cmd 悬停查词，一键收录到单词本的浏览器扩展。",
+  "description": "按住 Ctrl 悬停查词，一键收录到单词本的浏览器扩展。",
   "type": "module",
   "private": true,
   "scripts": {
@@ -35,6 +35,7 @@
     "vitest": "^2.1.3"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.110.2",
     "webextension-polyfill": "^0.12.0"
   }
 }

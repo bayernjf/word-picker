@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "WordPicker",
   "version": "1.0.0",
-  "description": "按住 Ctrl/Cmd 悬停查词，一键收录到单词本。",
+  "description": "按住 Ctrl 悬停查词，一键收录到单词本。",
   "author": "bayernjf",
   "icons": {
     "16": "assets/icons/icon16.png",
@@ -18,7 +18,8 @@
     "https://api.mymemory.translated.net/*",
     "https://dict.youdao.com/*",
     "http://localhost:3001/*",
-    "http://127.0.0.1:3001/*"
+    "http://127.0.0.1:3001/*",
+    "<all_urls>"
   ],
   "content_scripts": [
     {

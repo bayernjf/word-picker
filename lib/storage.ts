@@ -40,7 +40,7 @@ export interface Word {
 }
 
 export interface Settings {
-  lookupKey: "Control" | "Command" | "Alt" | "Option";
+  lookupKey: "Control" | "Meta" | "Alt" | "Shift";
   hoverDelay: number;
   translator: "free" | "fallback";
   useYoudaoDict: boolean;
@@ -63,10 +63,10 @@ export const DEFAULT_SETTINGS: Settings = {
   maxCacheSize: 200,
   syncEnabled: true,
   rememberDevice7Days: false,
-  syncBaseUrl: "http://localhost:3001",
+  syncBaseUrl: "https://word-base.pages.dev/app",
   pairingCode: "",
   syncToken: "",
-  fireworksEffect: "css",
+  fireworksEffect: "canvas",
 };
 
 const STORAGE_KEYS = {

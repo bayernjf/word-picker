@@ -28,6 +28,14 @@ import {
 import { DEFAULT_SYNC_BASE_URL, QUEUE_MAX_LENGTH } from '../lib/constants.js';
 import { MESSAGE_TYPES } from '../lib/messaging.js';
 import { createLogger } from '../lib/logger.js';
+import {
+  setSupabaseSession,
+  getSupabaseSession,
+  signInWithPassword,
+  signUp,
+  refreshSession as supabaseRefreshSession,
+  signOut as supabaseSignOut,
+} from '../lib/supabase.js';
 import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
 
@@ -107,9 +115,9 @@ async function handleMessage(message: Message): Promise<any> {
     case MESSAGE_TYPES.GET_SYNC_STATUS:
       return handleGetSyncStatus();
     case MESSAGE_TYPES.AUTH_LOGIN:
-      return handleAuthLogin(message.email as string, message.password as string, message.baseUrl as string);
+      return handleAuthLogin(message.email as string, message.password as string);
     case MESSAGE_TYPES.AUTH_REGISTER:
-      return handleAuthRegister(message.email as string, message.password as string, message.baseUrl as string);
+      return handleAuthRegister(message.email as string, message.password as string);
     case MESSAGE_TYPES.AUTH_LOGOUT:
       return handleAuthLogout();
     case MESSAGE_TYPES.AUTH_STATUS:
@@ -130,8 +138,7 @@ async function handleMessage(message: Message): Promise<any> {
 interface AuthData {
   accessToken: string;
   refreshToken: string;
-  user?: { email?: string };
-  baseUrl: string;
+  user?: { email?: string; id?: string };
   lastSyncAt?: number;
   expiresAt?: number | null;
 }
@@ -414,11 +421,7 @@ async function enqueueDelete(wordId: string): Promise<void> {
   await setDeleteQueue([wordId, ...queue].slice(0, QUEUE_MAX_LENGTH));
 }
 
-function normalizeBaseUrl(settings: Settings, auth: AuthData | null): string {
-  const authBaseUrl = typeof auth?.baseUrl === 'string' ? auth.baseUrl.trim() : '';
-  if (authBaseUrl) {
-    return authBaseUrl.replace(/\/+$/, '');
-  }
+function normalizeBaseUrl(settings: Settings): string {
   const settingsBaseUrl = typeof settings?.syncBaseUrl === 'string' ? settings.syncBaseUrl.trim() : '';
   return (settingsBaseUrl || DEFAULT_SYNC_BASE_URL).replace(/\/+$/, '');
 }
@@ -469,7 +472,7 @@ async function syncForRead(settingsOverride?: Settings): Promise<void> {
 }
 
 async function pullChanges(auth: AuthData, settings: Settings): Promise<void> {
-  const baseUrl = normalizeBaseUrl(settings, auth);
+  const baseUrl = normalizeBaseUrl(settings);
   const token = auth.accessToken;
   logger.debug('pullChanges started', { baseUrl });
   const [booksRes, wordsRes] = await Promise.all([
@@ -580,7 +583,7 @@ async function pushDeletes(auth: AuthData, settings: Settings): Promise<{ ok: bo
     return { ok: true, processed: 0 };
   }
 
-  const baseUrl = normalizeBaseUrl(settings, auth);
+  const baseUrl = normalizeBaseUrl(settings);
   const response = await fetch(`${baseUrl}/api/v1/words/batch-delete`, {
     method: 'POST',
     headers: {
@@ -609,7 +612,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
   }
   logger.debug('pushWords started', { queueSize: syncQueue.length });
 
-  const baseUrl = normalizeBaseUrl(settings, auth);
+  const baseUrl = normalizeBaseUrl(settings);
 
   // 从缓存的单词本中查找同步单词本，为缺少 bookId 的条目自动分配
   let syncBook: Book | null = null;
@@ -723,7 +726,6 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
     return { ok: false, skipped: true, queueSize };
   }
 
-  // 登录态已过期：清除并跳过同步
   if (isAuthExpired(auth)) {
     await setAuthData(null);
     await setCurrentUserEmail(null);
@@ -740,7 +742,15 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
   isSyncing = true;
 
   try {
-    let currentAuth = auth;
+    setSupabaseSession({
+      access_token: auth.accessToken,
+      refresh_token: auth.refreshToken,
+      user: auth.user?.id ? { id: auth.user.id, email: auth.user.email } : undefined,
+    });
+
+    const currentAuth: AuthData = {
+      ...auth,
+    };
 
     try {
       await pushDeletes(currentAuth, settings);
@@ -751,30 +761,39 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
         throw error;
       }
 
-      const refreshed = await doRefreshToken(normalizeBaseUrl(settings, currentAuth), currentAuth.refreshToken);
-      if (!refreshed.ok || !refreshed.accessToken) {
-        // 仅在 refresh token 真失效时登出；网络/临时错误保留登录态，下次重试
-        if (refreshed.authInvalid) {
-          await setAuthData(null);
-          await setCurrentUserEmail(null);
-          return { ok: false, error: refreshed.error || 'token_refresh_failed', loggedOut: true, queueSize };
-        }
-        return { ok: false, skipped: true, error: refreshed.error || 'token_refresh_temporary', queueSize };
+      const { session: refreshedSession, error: refreshError } = await supabaseRefreshSession(auth.refreshToken);
+      if (refreshError || !refreshedSession) {
+        await setAuthData(null);
+        await setCurrentUserEmail(null);
+        return { ok: false, error: refreshError?.message || 'token_refresh_failed', loggedOut: true, queueSize };
       }
 
-      currentAuth = {
-        ...currentAuth,
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken || currentAuth.refreshToken,
-        user: refreshed.user || currentAuth.user,
+      const refreshedAuth: AuthData = {
+        accessToken: refreshedSession.access_token,
+        refreshToken: refreshedSession.refresh_token,
+        user: refreshedSession.user
+          ? { email: refreshedSession.user.email || undefined, id: refreshedSession.user.id }
+          : currentAuth.user,
+        lastSyncAt: currentAuth.lastSyncAt,
+        expiresAt: currentAuth.expiresAt,
       };
-      await setAuthData({ ...currentAuth, lastSyncAt: Date.now() });
+      await setAuthData({ ...refreshedAuth, lastSyncAt: Date.now() });
 
-      await pushDeletes(currentAuth, settings);
-      await pushWords(currentAuth, settings);
-      await pullChanges(currentAuth, settings);
+      await pushDeletes(refreshedAuth, settings);
+      await pushWords(refreshedAuth, settings);
+      await pullChanges(refreshedAuth, settings);
     }
-    await setAuthData({ ...currentAuth, lastSyncAt: Date.now() });
+
+    const finalSession = getSupabaseSession();
+    if (finalSession) {
+      await setAuthData({
+        accessToken: finalSession.access_token,
+        refreshToken: finalSession.refresh_token,
+        user: finalSession.user ? { email: finalSession.user.email, id: finalSession.user.id } : undefined,
+        lastSyncAt: Date.now(),
+        expiresAt: auth.expiresAt,
+      });
+    }
     logger.info('flushSyncQueue success', { queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length });
 
     return {
@@ -783,10 +802,21 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } catch (error) {
-    logger.error('flushSyncQueue failed', { error: String(error) });
+    const msg = error instanceof Error ? error.message : String(error);
+    const isNetworkError =
+      msg === 'Failed to fetch' ||
+      msg.includes('NetworkError') ||
+      msg.includes('network') ||
+      msg.includes('timeout') ||
+      msg.includes('AbortError');
+    if (isNetworkError) {
+      logger.warn('flushSyncQueue skipped (network error)', { error: msg });
+    } else {
+      logger.error('flushSyncQueue failed', { error: msg });
+    }
     return {
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: msg,
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } finally {
@@ -797,10 +827,9 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
 function isAuthData(value: unknown): value is AuthData {
   return Boolean(
     value &&
-    typeof value === 'object' &&
-    typeof (value as Partial<AuthData>).accessToken === 'string' &&
-    typeof (value as Partial<AuthData>).refreshToken === 'string' &&
-    typeof (value as Partial<AuthData>).baseUrl === 'string'
+      typeof value === 'object' &&
+      typeof (value as Partial<AuthData>).accessToken === 'string' &&
+      typeof (value as Partial<AuthData>).refreshToken === 'string'
   );
 }
 
@@ -924,68 +953,71 @@ async function clearUserData(): Promise<void> {
   ]);
 }
 
-async function handleAuthLogin(email: string, password: string, baseUrl: string): Promise<any> {
-  const normalizedUrl = (baseUrl || 'http://localhost:3001').trim().replace(/\/+$/, '');
-  const result = await doLoginOrRegister(normalizedUrl, 'login', email, password);
+async function handleAuthLogin(email: string, password: string): Promise<any> {
+  const { session, error } = await signInWithPassword(email, password);
 
-  if (result.ok && result.accessToken && result.refreshToken) {
-    const previousEmail = await getCurrentUserEmail();
-    const newEmail = result.user?.email || email;
-
-    // 如果用户切换了账号，清空旧数据
-    if (previousEmail && previousEmail !== newEmail) {
-      await clearUserData();
-    }
-
-    await setCurrentUserEmail(newEmail);
-    const settings = await getSettings();
-    await setAuthData({
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-      user: result.user,
-      baseUrl: normalizedUrl,
-      lastSyncAt: Date.now(),
-      expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
-    });
-    // 记住凭证用于回填：邮箱始终保存，密码仅在勾选记住时保存
-    await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
-    await setupAlarms();
-    // 立即拉取新用户的数据
-    await flushSyncQueue(settings);
+  if (error || !session) {
+    return { ok: false, error: error?.message || 'login_failed' };
   }
-  return result;
+
+  const previousEmail = await getCurrentUserEmail();
+  const newEmail = session.user?.email || email;
+
+  if (previousEmail && previousEmail !== newEmail) {
+    await clearUserData();
+  }
+
+  await setCurrentUserEmail(newEmail);
+  const settings = await getSettings();
+  await setAuthData({
+    accessToken: session.access_token,
+    refreshToken: session.refresh_token,
+    user: { email: newEmail, id: session.user?.id || '' },
+    lastSyncAt: Date.now(),
+    expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
+  });
+  await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
+  await setupAlarms();
+  await flushSyncQueue(settings);
+
+  return {
+    ok: true,
+    user: { email: newEmail, id: session.user?.id || '' },
+    accessToken: session.access_token,
+  };
 }
 
-async function handleAuthRegister(email: string, password: string, baseUrl: string): Promise<any> {
-  const normalizedUrl = (baseUrl || 'http://localhost:3001').trim().replace(/\/+$/, '');
-  const result = await doLoginOrRegister(normalizedUrl, 'register', email, password);
+async function handleAuthRegister(email: string, password: string): Promise<any> {
+  const { session, user, error, needsEmailConfirmation } = await signUp(email, password);
 
-  if (result.ok && result.accessToken && result.refreshToken) {
-    const previousEmail = await getCurrentUserEmail();
-    const newEmail = result.user?.email || email;
-
-    // 如果用户切换了账号，清空旧数据
-    if (previousEmail && previousEmail !== newEmail) {
-      await clearUserData();
-    }
-
-    await setCurrentUserEmail(newEmail);
-    const settings = await getSettings();
-    await setAuthData({
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-      user: result.user,
-      baseUrl: normalizedUrl,
-      lastSyncAt: Date.now(),
-      expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
-    });
-    // 记住凭证用于回填：邮箱始终保存，密码仅在勾选记住时保存
-    await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
-    await setupAlarms();
-    // 立即拉取新用户的数据
-    await flushSyncQueue(settings);
+  if (error) {
+    return { ok: false, error: error.message };
   }
-  return result;
+
+  if (needsEmailConfirmation || !session) {
+    return { ok: true, needsEmailConfirmation: true, user: user ? { email } : null };
+  }
+
+  const newEmail = session.user?.email || email;
+
+  await setCurrentUserEmail(newEmail);
+  const settings = await getSettings();
+  await setAuthData({
+    accessToken: session.access_token,
+    refreshToken: session.refresh_token,
+    user: { email: newEmail, id: session.user?.id || '' },
+    lastSyncAt: Date.now(),
+    expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
+  });
+  await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
+  await setupAlarms();
+  await flushSyncQueue(settings);
+
+  return {
+    ok: true,
+    user: { email: newEmail, id: session.user?.id || '' },
+    accessToken: session.access_token,
+  };
 }
 
 async function handleAuthLogout(): Promise<{ ok: boolean }> {
@@ -1003,88 +1035,13 @@ async function handleAuthStatus(): Promise<any> {
     await setAuthData(null);
     await setCurrentUserEmail(null);
     await clearUserData();
-    return { ok: true, isLoggedIn: false, user: null, baseUrl: auth.baseUrl || '' };
+    return { ok: true, isLoggedIn: false, user: null };
   }
   return {
     ok: true,
     isLoggedIn: Boolean(auth?.accessToken && auth?.refreshToken),
     user: auth?.user || null,
-    baseUrl: auth?.baseUrl || '',
   };
-}
-
-async function doLoginOrRegister(baseUrl: string, type: 'login' | 'register', email: string, password: string): Promise<any> {
-  const endpoint = type === 'login' ? '/api/v1/auth/login' : '/api/v1/auth/register';
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-
-  try {
-    const response = await fetch(`${baseUrl}${endpoint}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-      signal: controller.signal,
-    });
-    const text = await response.text();
-
-    if (!response.ok) {
-      return { ok: false, status: response.status, error: text || 'request_failed' };
-    }
-
-    const data = text ? JSON.parse(text) : null;
-    if (!data?.accessToken || !data?.refreshToken) {
-      return { ok: false, error: 'invalid_response' };
-    }
-
-    return {
-      ok: true,
-      accessToken: data.accessToken,
-      refreshToken: data.refreshToken,
-      user: data.user || null,
-    };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function doRefreshToken(baseUrl: string, refreshToken: string): Promise<any> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 10000);
-
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refreshToken }),
-      signal: controller.signal,
-    });
-    const text = await response.text();
-
-    if (!response.ok) {
-      // 仅 401/403 视为 refresh token 真失效（需要登出）；其余（5xx 等）视为临时错误
-      const authInvalid = response.status === 401 || response.status === 403;
-      return { ok: false, status: response.status, authInvalid, error: text || 'refresh_failed' };
-    }
-
-    const data = text ? JSON.parse(text) : null;
-    if (!data?.accessToken) {
-      return { ok: false, error: 'invalid_refresh_response' };
-    }
-
-    return {
-      ok: true,
-      accessToken: data.accessToken,
-      refreshToken: data.refreshToken || refreshToken,
-      user: data.user || null,
-    };
-  } catch (error) {
-    // 网络错误/超时：临时错误，不应登出
-    return { ok: false, authInvalid: false, error: error instanceof Error ? error.message : String(error) };
-  } finally {
-    clearTimeout(timeout);
-  }
 }
 
 async function handleTranslate(word: string): Promise<{ translation: TranslationResult | OfflineTranslationResult; fromCache?: boolean; fromOffline?: boolean }> {

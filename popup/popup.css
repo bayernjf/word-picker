@@ -5,6 +5,17 @@
   gap: 14px;
 }
 
+.toolbar .wordbase-link {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.toolbar .wordbase-link img {
+  height: 108px;
+}
+
 .brand-logo {
   width: 56px;
   height: 56px;

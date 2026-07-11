@@ -1,7 +1,7 @@
-export const DEFAULT_SYNC_BASE_URL = "http://localhost:3001";
+export const DEFAULT_SYNC_BASE_URL = "https://word-base.pages.dev/app";
 
 // word-base 前端地址（登录/注册页面）
-export const WORD_BASE_APP_URL = "http://localhost:3000";
+export const WORD_BASE_APP_URL = "https://word-base.pages.dev/app";
 
 export const SETTINGS_LIMITS = {
   HOVER_DELAY_MIN: 100,
