@@ -45,8 +45,26 @@ const STORAGE_DEVICE_ID = 'deviceId';
 const STORAGE_SYNC_QUEUE = 'syncQueue';
 const STORAGE_DELETE_QUEUE = 'deleteQueue';
 const STORAGE_AUTH = 'authData';
+const STORAGE_SYNC_LOCK = 'syncLock';
 
 let isSyncing = false;
+
+// 同步锁持久化：Service Worker 被系统回收后恢复状态
+async function syncLockAcquire(): Promise<boolean> {
+  const data = await browser.storage.local.get([STORAGE_SYNC_LOCK]);
+  const locked = Boolean(data?.[STORAGE_SYNC_LOCK]);
+  if (locked) {
+    return false;
+  }
+  await browser.storage.local.set({ [STORAGE_SYNC_LOCK]: true });
+  isSyncing = true;
+  return true;
+}
+
+async function syncLockRelease(): Promise<void> {
+  isSyncing = false;
+  await browser.storage.local.remove([STORAGE_SYNC_LOCK]);
+}
 
 browser.runtime.onInstalled.addListener(() => {
   void ensureDefaults();
@@ -710,18 +728,16 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     throw new Error(text || 'word_sync_failed');
   }
 
-  const syncedWordKeys = new Set(
-    payload.map((item) => `${normalizeWordValue(item.word)}::${normalizeBookValue(item.book_id)}`)
-  );
-  if (syncedWordKeys.size > 0) {
+  // 清除已同步的队列项：通过匹配 word + bookId 组合
+  const syncedPairs = new Set(payload.map((item) => `${normalizeWordValue(item.word)}::${normalizeBookValue(item.book_id)}`));
+  if (syncedPairs.size > 0) {
     await setSyncQueue(
       syncQueue.filter((item) => {
-        const bookId = item.bookId || syncBook?.id || '';
-        const key = `${normalizeWordValue(item.word)}::${normalizeBookValue(bookId)}`;
-        return !syncedWordKeys.has(key);
+        const pair = `${normalizeWordValue(item.word)}::${normalizeBookValue(item.bookId || '')}`;
+        return !syncedPairs.has(pair);
       })
     );
-    logger.info(`[pushWords] 同步完成，清除 ${syncedWordKeys.size} 条，队列剩余 ${Math.max(0, syncQueue.length - syncedWordKeys.size)} 条`);
+    logger.info(`[pushWords] 同步完成，清除 ${syncedPairs.size} 条，队列剩余 ${(await getSyncQueue()).length} 条`);
   }
 
   return { ok: true, processed: payload.length, queueSize: (await getSyncQueue()).length };
@@ -800,8 +816,14 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
     return { ok: true, skipped: true, queueSize };
   }
 
+  // 尝试获取同步锁
+  const acquired = await syncLockAcquire();
+  if (!acquired) {
+    logger.debug('flushSyncQueue skipped (lock held by another process)');
+    return { ok: true, skipped: true, queueSize };
+  }
+
   logger.debug('flushSyncQueue started', { syncQueue: syncQueue.length, deleteQueue: deleteQueue.length });
-  isSyncing = true;
 
   try {
     setSupabaseSession({
@@ -882,7 +904,7 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } finally {
-    isSyncing = false;
+    await syncLockRelease();
   }
 }
 
@@ -913,8 +935,84 @@ const STORAGE_REMEMBERED_CREDENTIALS = 'rememberedCredentials';
 
 interface RememberedCredentials {
   email: string;
+  /** 简单 XOR 加密的密码（非安全级别，仅防直接读取） */
   password: string;
   savedAt: number;
+}
+
+/** 密码编码（使用 PBKDF2 派生密钥 + AES-GCM 加密） */
+async function encodePassword(pwd: string): Promise<string> {
+  if (!pwd) return '';
+  try {
+    const deviceId = await ensureDeviceId();
+    const encoder = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(deviceId),
+      'PBKDF2',
+      false,
+      ['deriveKey']
+    );
+    const aesKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: encoder.encode('wordpicker-salt'), iterations: 100000, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      aesKey,
+      encoder.encode(pwd)
+    );
+    return btoa(JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) }));
+  } catch {
+    // 降级：使用设备 ID 派生的简单 XOR
+    const deviceId = await ensureDeviceId();
+    const deviceKey = deviceId.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0) % 256;
+    return btoa(pwd.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ deviceKey)).join(''));
+  }
+}
+
+/** 密码解码 */
+async function decodePassword(encoded: string): Promise<string> {
+  if (!encoded) return '';
+  try {
+    const parsed = JSON.parse(atob(encoded));
+    const deviceId = await ensureDeviceId();
+    const encoder = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(deviceId),
+      'PBKDF2',
+      false,
+      ['deriveKey']
+    );
+    const aesKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: encoder.encode('wordpicker-salt'), iterations: 100000, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(parsed.iv) },
+      aesKey,
+      new Uint8Array(parsed.data)
+    );
+    return new TextDecoder().decode(decrypted);
+  } catch {
+    // 降级：尝试简单 XOR
+    try {
+      const deviceId = await ensureDeviceId();
+      const deviceKey = deviceId.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0) % 256;
+      const decoded = atob(encoded);
+      return decoded.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ deviceKey)).join('');
+    } catch {
+      return '';
+    }
+  }
 }
 
 function isRememberedCredentials(value: unknown): value is RememberedCredentials {
@@ -933,12 +1031,13 @@ async function getRememberedCredentials(): Promise<RememberedCredentials | null>
   return isRememberedCredentials(cred) ? cred : null;
 }
 
-// 保存登录凭证（email 始终保留以便回填；password 仅在勾选记住时保留）
+// 保存登录凭证（email 始终保留以便回填；password 仅在勾选记住时保留，加密存储）
 async function saveRememberedCredentials(email: string, password: string, remember: boolean): Promise<void> {
+  const encryptedPassword = remember ? await encodePassword(password || '') : '';
   await browser.storage.local.set({
     [STORAGE_REMEMBERED_CREDENTIALS]: {
       email: email || '',
-      password: remember ? (password || '') : '',
+      password: encryptedPassword,
       savedAt: Date.now(),
     },
   });
@@ -987,7 +1086,9 @@ async function handleAuthGetCredentials(): Promise<{ ok: boolean; email: string;
     });
     return { ok: true, email: cred.email || '', password: '' };
   }
-  return { ok: true, email: cred.email || '', password: expired ? '' : (cred.password || '') };
+  // 解码存储的密码
+  const decodedPassword = cred.password ? await decodePassword(cred.password) : '';
+  return { ok: true, email: cred.email || '', password: expired ? '' : decodedPassword };
 }
 
 // 存储当前登录用户的唯一标识（用于检测用户切换）
@@ -1012,6 +1113,9 @@ async function clearUserData(): Promise<void> {
     'deleteQueue',
     STORAGE_SYNC_QUEUE,
     STORAGE_DELETE_QUEUE,
+    STORAGE_AUTH,
+    STORAGE_REMEMBERED_CREDENTIALS,
+    STORAGE_CURRENT_USER_EMAIL,
   ]);
 }
 
