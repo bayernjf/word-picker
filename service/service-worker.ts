@@ -614,12 +614,10 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
 
   const baseUrl = normalizeBaseUrl(settings);
 
-  // 从缓存的单词本中查找同步单词本，为缺少 bookId 的条目自动分配
   let syncBook: Book | null = null;
   const cachedBooks = await getBooks();
   syncBook = selectPreferredSyncBook(cachedBooks);
 
-  // 如果缓存中没有同步单词本，尝试从服务器获取
   if (!syncBook) {
     try {
       const booksRes = await fetch(`${baseUrl}/api/v1/books`, {
@@ -632,7 +630,6 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
           : null;
         if (serverSyncBook) {
           syncBook = { id: serverSyncBook.id, name: serverSyncBook.name, isSync: true };
-          // 同时更新本地缓存
           await saveBooks(serverBooks.map(mapServerBookToLocal));
         }
       }
@@ -641,13 +638,39 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     }
   }
 
+  let serverWordsMap = new Map<string, { level: string; familiarity: number }>();
+  try {
+    const wordsRes = await fetch(`${baseUrl}/api/v1/words`, {
+      headers: { Authorization: `Bearer ${auth.accessToken}` },
+    });
+    if (wordsRes.ok) {
+      const serverWords = await wordsRes.json();
+      if (Array.isArray(serverWords)) {
+        serverWords.forEach((word: any) => {
+          const key = `${normalizeWordValue(word.word)}::${normalizeBookValue(word.book_id || '')}`;
+          serverWordsMap.set(key, {
+            level: word.level || 'B2',
+            familiarity: Number(word.familiarity) || 0,
+          });
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn('[pushWords] 无法从服务器获取已有单词:', (err as Error).message);
+  }
+
   const payload = syncQueue
     .map((item) => {
       const mapped = mapLocalWordToServer(item);
       const bookId = mapped.book_id;
-      // 自动分配 book_id：如果未设置或是无效值，使用缓存中的同步单词本 ID
       if ((!bookId || bookId === 'local_default_book' || bookId.length < 10) && syncBook) {
         mapped.book_id = syncBook.id;
+      }
+      const key = `${normalizeWordValue(mapped.word)}::${normalizeBookValue(mapped.book_id)}`;
+      const existingSrs = serverWordsMap.get(key);
+      if (existingSrs) {
+        mapped.level = existingSrs.level;
+        mapped.familiarity = existingSrs.familiarity;
       }
       return mapped;
     })
@@ -661,7 +684,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
         list[index] = item;
       }
       return list;
-    }, [] as ServerWordPayload[]); // 合并同一单词/单词本的重复推送，避免服务端 upsert 冲突。
+    }, [] as ServerWordPayload[]);
 
   if (payload.length === 0) {
     logger.warn('[pushWords] 无法同步单词：没有可用的 book_id，已缓存待下次同步');
@@ -687,7 +710,6 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     throw new Error(text || 'word_sync_failed');
   }
 
-  // 只清除已成功同步的词条
   const syncedWordKeys = new Set(
     payload.map((item) => `${normalizeWordValue(item.word)}::${normalizeBookValue(item.book_id)}`)
   );
@@ -703,6 +725,46 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
   }
 
   return { ok: true, processed: payload.length, queueSize: (await getSyncQueue()).length };
+}
+
+async function ensureDefaultBookOnServer(accessToken: string, settings: Settings): Promise<void> {
+  const baseUrl = normalizeBaseUrl(settings);
+  const booksRes = await fetch(`${baseUrl}/api/v1/books`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!booksRes.ok) {
+    throw new Error('failed_to_fetch_books');
+  }
+
+  const serverBooks = await booksRes.json();
+  const hasAnyBook = Array.isArray(serverBooks) && serverBooks.length > 0;
+
+  if (!hasAnyBook) {
+    const createRes = await fetch(`${baseUrl}/api/v1/books`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        name: '默认',
+        description: '默认单词本',
+        is_sync: true,
+      }),
+    });
+
+    if (createRes.ok) {
+      const newBook = await createRes.json();
+      await saveBooks([mapServerBookToLocal(newBook)]);
+      logger.info('[ensureDefaultBookOnServer] 默认单词本创建成功:', newBook.id);
+    } else {
+      const text = await createRes.text();
+      throw new Error(`failed_to_create_default_book: ${text}`);
+    }
+  } else {
+    await saveBooks(serverBooks.map(mapServerBookToLocal));
+  }
 }
 
 interface FlushResult {
@@ -1011,6 +1073,13 @@ async function handleAuthRegister(email: string, password: string): Promise<any>
   });
   await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
+
+  try {
+    await ensureDefaultBookOnServer(session.access_token, settings);
+  } catch (err) {
+    logger.warn('[handleAuthRegister] 创建默认单词本失败:', (err as Error).message);
+  }
+
   await flushSyncQueue(settings);
 
   return {
