@@ -90,7 +90,43 @@ interface YoudaoResult {
   meaning: string;
 }
 
+// 翻译 API 并发限流器
+const MAX_CONCURRENT_TRANSLATE = 3;
+let concurrentRequests = 0;
+const requestQueue: Array<() => void> = [];
+
+function acquireTranslateSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    if (concurrentRequests < MAX_CONCURRENT_TRANSLATE) {
+      concurrentRequests++;
+      resolve();
+    } else {
+      requestQueue.push(() => {
+        concurrentRequests++;
+        resolve();
+      });
+    }
+  });
+}
+
+function releaseTranslateSlot(): void {
+  concurrentRequests--;
+  if (requestQueue.length > 0) {
+    const next = requestQueue.shift();
+    next?.();
+  }
+}
+
 async function translateWithFreeApis(word: string, useYoudao: boolean = true): Promise<TranslationResult> {
+  await acquireTranslateSlot();
+  try {
+    return doTranslateWithFreeApis(word, useYoudao);
+  } finally {
+    releaseTranslateSlot();
+  }
+}
+
+async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true): Promise<TranslationResult> {
   const fallback = buildFallbackTranslation(word);
   const [translationResult, dictionaryResult, youdaoResult] = await Promise.allSettled([
     withTimeout(fetchFreeTranslation(word), 2500),
