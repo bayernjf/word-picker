@@ -338,7 +338,8 @@
     // 即时高亮鼠标指向的单词（独立于弹窗的 hoverDelay，体验更跟手）
     updateHoverHighlight(event.clientX, event.clientY);
 
-    if (currentState !== STATE.PEN && currentState !== STATE.SHOWING && currentState !== STATE.LOADING) {
+    // 只在 PEN 状态下才触发 lookup（SHOWING/LOADING 时由已有弹窗处理）
+    if (currentState !== STATE.PEN) {
       return;
     }
 
@@ -388,6 +389,21 @@
     const requestToken = ++latestRequestToken;
 
     try {
+      // 检查网络状态
+      if (!navigator.onLine) {
+        updatePopup({
+          word: detection.word,
+          phonetic: "",
+          meaning: "当前处于离线状态，无法获取翻译",
+          exampleEn: "",
+          exampleZh: "",
+          sentence: extractSentenceFromDetection(detection),
+          error: true,
+        });
+        currentState = STATE.SHOWING;
+        return;
+      }
+
       const response = await sendMessage({
         type: "TRANSLATE",
         word: detection.word,
@@ -820,13 +836,15 @@
     toastNode = node;
     toastShadow.appendChild(node);
 
+    // 根据内容长度动态调整显示时间（最少 1.4 秒，每 10 字符加 200 毫秒）
+    const displayDuration = Math.max(1400, message.length * 200);
     toastTimer = window.setTimeout(() => {
       if (toastNode === node) {
         node.remove();
         toastNode = null;
       }
       toastTimer = null;
-    }, 1400);
+    }, displayDuration);
   }
 
   // 序列化 DOM 节点为 XPath（用于精确定位回原文）
@@ -910,7 +928,7 @@
       contexts: contexts,
       // 保留旧数据作为兼容
       _legacy: {
-        id: crypto.randomUUID(),
+        id: (crypto as any).randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         phonetic: lookup.translation!.phonetic || "",
         exampleEn: lookup.translation!.exampleEn || "",
         exampleZh: lookup.translation!.exampleZh || "",
