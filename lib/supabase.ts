@@ -1,5 +1,5 @@
-export const SUPABASE_URL = 'https://zzmolktkgorerpaoglpr.supabase.co';
-export const SUPABASE_ANON_KEY = 'sb_publishable_uRzBziAotom_ZoJdGR02uQ_nTLK-VsN';
+export const SUPABASE_URL = process.env.SUPABASE_URL || 'https://zzmolktkgorerpaoglpr.supabase.co';
+export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_uRzBziAotom_ZoJdGR02uQ_nTLK-VsN';
 
 interface SupabaseSession {
   access_token: string;

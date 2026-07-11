@@ -114,9 +114,19 @@ function copyDirContents(src: string, dest: string): void {
       copyDirContents(srcPath, destPath);
     } else {
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.copyFileSync(srcPath, destPath);
+      let content = fs.readFileSync(srcPath, "utf-8");
+      content = replaceEnvVars(content);
+      fs.writeFileSync(destPath, content);
     }
   }
+}
+
+function replaceEnvVars(content: string): string {
+  const supabaseUrl = process.env.SUPABASE_URL || 'https://zzmolktkgorerpaoglpr.supabase.co';
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_uRzBziAotom_ZoJdGR02uQ_nTLK-VsN';
+  content = content.replace(/process\.env\.SUPABASE_URL/g, JSON.stringify(supabaseUrl));
+  content = content.replace(/process\.env\.SUPABASE_ANON_KEY/g, JSON.stringify(supabaseAnonKey));
+  return content;
 }
 
 function main(): void {
