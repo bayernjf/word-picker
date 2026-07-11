@@ -1,4 +1,4 @@
-export const DEFAULT_SYNC_BASE_URL = "https://word-base.pages.dev/app";
+export const DEFAULT_SYNC_BASE_URL = "https://word-base.pages.dev";
 
 // word-base 前端地址（登录/注册页面）
 export const WORD_BASE_APP_URL = "https://word-base.pages.dev/app";

@@ -49,8 +49,6 @@ export interface Settings {
   syncEnabled: boolean;
   rememberDevice7Days: boolean;
   syncBaseUrl: string;
-  pairingCode: string;
-  syncToken: string;
   fireworksEffect: "canvas" | "css" | "none";
 }
 
@@ -63,9 +61,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxCacheSize: 200,
   syncEnabled: true,
   rememberDevice7Days: false,
-  syncBaseUrl: "https://word-base.pages.dev/app",
-  pairingCode: "",
-  syncToken: "",
+  syncBaseUrl: "https://word-base.pages.dev",
   fireworksEffect: "canvas",
 };
 
