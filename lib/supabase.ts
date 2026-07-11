@@ -1,5 +1,27 @@
-export const SUPABASE_URL = process.env.SUPABASE_URL || 'https://zzmolktkgorerpaoglpr.supabase.co';
-export const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || 'sb_publishable_uRzBziAotom_ZoJdGR02uQ_nTLK-VsN';
+function readEnv(key: string): string | undefined {
+  const bareKey = key.replace(/^NEXT_PUBLIC_/, '');
+
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key] || process.env[bareKey];
+  }
+
+  const metaEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  if (typeof import.meta !== 'undefined' && metaEnv) {
+    return metaEnv?.[key] || metaEnv?.[bareKey];
+  }
+
+  return undefined;
+}
+
+export const SUPABASE_URL =
+  readEnv('NEXT_PUBLIC_SUPABASE_URL') ||
+  readEnv('SUPABASE_URL') ||
+  'https://zzmolktkgorerpaoglpr.supabase.co';
+
+export const SUPABASE_ANON_KEY =
+  readEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY') ||
+  readEnv('SUPABASE_ANON_KEY') ||
+  '';
 
 interface SupabaseSession {
   access_token: string;

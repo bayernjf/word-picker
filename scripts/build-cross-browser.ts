@@ -122,9 +122,17 @@ function copyDirContents(src: string, dest: string): void {
 }
 
 function replaceEnvVars(content: string): string {
-  const supabaseUrl = process.env.SUPABASE_URL || 'https://zzmolktkgorerpaoglpr.supabase.co';
-  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || 'sb_publishable_uRzBziAotom_ZoJdGR02uQ_nTLK-VsN';
+  const supabaseUrl =
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL ||
+    'https://zzmolktkgorerpaoglpr.supabase.co';
+  const supabaseAnonKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.SUPABASE_ANON_KEY ||
+    '';
+  content = content.replace(/process\.env\.NEXT_PUBLIC_SUPABASE_URL/g, JSON.stringify(supabaseUrl));
   content = content.replace(/process\.env\.SUPABASE_URL/g, JSON.stringify(supabaseUrl));
+  content = content.replace(/process\.env\.NEXT_PUBLIC_SUPABASE_ANON_KEY/g, JSON.stringify(supabaseAnonKey));
   content = content.replace(/process\.env\.SUPABASE_ANON_KEY/g, JSON.stringify(supabaseAnonKey));
   return content;
 }
