@@ -30,7 +30,7 @@ export async function getCachedTranslation(word: string): Promise<CachedTranslat
   }
 
   const cache = await getCacheMap();
-  const entry = cache[key];
+  const entry = cache[key] as CachedTranslation | undefined;
   if (!entry) {
     return null;
   }
@@ -74,7 +74,7 @@ export async function setCachedTranslation(
     lastAccessedAt: Date.now(),
   };
 
-  const entries = Object.entries(cache);
+  const entries = Object.entries(cache) as Array<[string, CachedTranslation]>;
   const overflow = entries.length - maxCacheSize;
   if (overflow > 0) {
     const sorted = entries.sort((a, b) => {
@@ -87,5 +87,5 @@ export async function setCachedTranslation(
   }
 
   await saveCacheMap(cache);
-  return cache[key];
+  return cache[key] as CachedTranslation;
 }

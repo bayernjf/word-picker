@@ -54,7 +54,7 @@ function txComplete(tx: IDBTransaction): Promise<void> {
   });
 }
 
-function getByKey(db: IDBDatabase, storeName: string, key: string): Promise<any> {
+function getByKey(db: IDBDatabase, storeName: string, key: string): Promise<Record<string, unknown> | null> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, "readonly");
     const request = tx.objectStore(storeName).get(key);
@@ -183,7 +183,7 @@ export async function lookupOffline(word: string): Promise<OfflineTranslationRes
     // 2. 未命中 -> 词形还原（went -> go）后再查
     if (!entry) {
       const lemmaEntry = await getByKey(db, STORE_LEMMA, normalized);
-      if (lemmaEntry?.to) {
+      if (lemmaEntry && typeof lemmaEntry.to === 'string') {
         entry = await getByKey(db, STORE_ENTRIES, lemmaEntry.to);
       }
     }
@@ -195,9 +195,9 @@ export async function lookupOffline(word: string): Promise<OfflineTranslationRes
 
     logger.info('lookupOffline hit', { word: entry.word || word });
     return {
-      word: entry.word || word,
-      meaning: entry.translation,
-      phonetic: entry.phonetic || "",
+      word: String(entry.word || word),
+      meaning: String(entry.translation),
+      phonetic: String(entry.phonetic || ""),
       exampleEn: "",
       exampleZh: "",
       note: "",

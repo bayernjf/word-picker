@@ -1,5 +1,20 @@
+interface SharedAPI {
+  escapeHtml: (value: unknown) => string;
+  sendMessage: (message: object) => Promise<{ success?: boolean; error?: string; [key: string]: unknown }>;
+  createLogger: (namespace: string) => { debug: (...args: unknown[]) => void; info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
+}
+
+interface FireworksAPI {
+  launchFireworks: (effectMode: string, x: number, y: number) => void;
+  clearFireworks: () => void;
+}
+
+function getFireworksAPI(): FireworksAPI {
+  return (window as unknown as { __WordPickerFireworks: FireworksAPI }).__WordPickerFireworks;
+}
+
 (() => {
-  const { escapeHtml, sendMessage, createLogger } = (window as any).__WordPickerShared;
+  const { escapeHtml, sendMessage, createLogger } = (window as unknown as { __WordPickerShared: SharedAPI }).__WordPickerShared;
   const _logger = createLogger("content-script");
 
   const STATE = {
@@ -122,12 +137,12 @@
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         exitPenMode();
-        (window as any).__WordPickerFireworks.clearFireworks();
+        getFireworksAPI().clearFireworks();
       }
     });
   }
 
-  function handleStorageChange(changes: Record<string, { oldValue?: any; newValue?: any }>, areaName: string): void {
+  function handleStorageChange(changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, areaName: string): void {
     if (areaName !== "local" || !changes.settings?.newValue) {
       return;
     }
@@ -413,7 +428,7 @@
         return;
       }
 
-      const translation = response.translation || buildLoadingData(detection.word);
+      const translation = (response.translation as TranslationData) || buildLoadingData(detection.word);
       currentLookup.translation = translation;
       _logger.debug('lookupAtPoint translation received', { word: detection.word, provider: translation.provider });
       updatePopup({
@@ -749,7 +764,7 @@
 
       if (response.saved) {
         showToast("添加成功");
-        (window as any).__WordPickerFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
+        getFireworksAPI().launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
         safeClosePopupAndReset();
         return;
       }
@@ -892,7 +907,31 @@
     return `${cleanUrl}#:~:text=${encodeURIComponent(fragment)}`;
   }
 
-  function buildWordEntry(lookup: CurrentLookup): any {
+  function buildWordEntry(lookup: CurrentLookup): {
+    word: string;
+    frequency: number;
+    translation: string;
+    timeAdded: number;
+    timeUpdated: number;
+    contexts: Array<{
+      context: string;
+      timeAdded: number;
+      sourceLink: string;
+      sourceRange?: SourceRange;
+      translation: string;
+    }>;
+    _legacy: {
+      id: string;
+      phonetic: string;
+      exampleEn: string;
+      exampleZh: string;
+      sourceUrl: string;
+      sourceTitle: string;
+      tags: string[];
+      createdAt: number;
+      reviewCount: number;
+    };
+  } {
     const sentence = extractSentenceFromDetection(lookup);
     const now = Date.now();
 
@@ -928,7 +967,7 @@
       contexts: contexts,
       // 保留旧数据作为兼容
       _legacy: {
-        id: (crypto as any).randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        id: (crypto as Crypto).randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         phonetic: lookup.translation!.phonetic || "",
         exampleEn: lookup.translation!.exampleEn || "",
         exampleZh: lookup.translation!.exampleZh || "",
@@ -941,7 +980,7 @@
     };
   }
 
-  async function saveLookupWord(lookup: CurrentLookup): Promise<any> {
+  async function saveLookupWord(lookup: CurrentLookup): Promise<SendMessageResponse> {
     if (!lookup?.translation) {
       throw new Error("单词翻译数据无效");
     }
@@ -974,7 +1013,7 @@
 
     if (response.saved) {
       showToast("添加成功");
-      (window as any).__WordPickerFireworks.launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
+      getFireworksAPI().launchFireworks(settings.fireworksEffect, activeAnchor.x, activeAnchor.y);
       safeClosePopupAndReset();
       return;
     }
@@ -1108,7 +1147,7 @@
       range.setEnd(node, end);
       highlight.clear();
       highlight.add(range);
-    } catch (error) {
+    } catch {
       highlight.clear();
     }
   }

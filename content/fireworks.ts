@@ -228,8 +228,9 @@
     launchCssFireworks(x, y);
   }
 
-  (window as any).__WordPickerFireworks = {
+  const fwApi = {
     launchFireworks,
     clearFireworks,
   };
+  (window as unknown as { __WordPickerFireworks: typeof fwApi }).__WordPickerFireworks = fwApi;
 })();

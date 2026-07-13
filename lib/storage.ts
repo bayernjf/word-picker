@@ -4,6 +4,7 @@ import {
   normalizeContextValue,
   normalizeSourceLinkValue,
 } from "./utils.js";
+import { DEFAULT_SYNC_BASE_URL } from "./constants.js";
 import type { Book } from "./utils.js";
 
 export interface WordContext {
@@ -34,7 +35,7 @@ export interface Word {
     tags?: string[];
     reviewCount?: number;
     createdAt?: number;
-    [key: string]: any;
+    [key: string]: unknown;
   };
   id?: string;
 }
@@ -61,7 +62,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxCacheSize: 200,
   syncEnabled: true,
   rememberDevice7Days: false,
-  syncBaseUrl: "https://word-base.pages.dev",
+  syncBaseUrl: DEFAULT_SYNC_BASE_URL,
   fireworksEffect: "canvas",
 };
 
@@ -87,8 +88,24 @@ export function formatDateTimeForDisplay(timestamp: number): string {
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }
 
+interface OldWordFormat {
+  word?: string;
+  meaning?: string;
+  sentence?: string;
+  sourceUrl?: string;
+  createdAt?: number;
+  id?: string;
+  phonetic?: string;
+  exampleEn?: string;
+  exampleZh?: string;
+  sourceTitle?: string;
+  tags?: string[];
+  reviewCount?: number;
+  [key: string]: unknown;
+}
+
 // 旧格式迁移函数
-export function migrateOldWordFormat(oldWord: any): Word {
+export function migrateOldWordFormat(oldWord: OldWordFormat): Word {
   const now = Date.now();
   const timeAdded = oldWord.createdAt || now;
 
@@ -127,41 +144,41 @@ export function migrateOldWordFormat(oldWord: any): Word {
 }
 
 // 检查是否是旧格式
-function isOldFormat(word: any): boolean {
+function isOldFormat(word: Partial<Word> & { [key: string]: unknown }): boolean {
   return !word.frequency && !word.contexts && !word.timeAdded;
 }
 
 export interface StorageData {
   words: Word[];
   books: Book[];
-  cache: any;
+  cache: Record<string, unknown>;
   settings: Settings;
 }
 
 export async function ensureDefaults(): Promise<StorageData> {
-  const current: any = await browser.storage.local.get([
+  const current: Record<string, unknown> = await browser.storage.local.get([
     STORAGE_KEYS.WORDS,
     STORAGE_KEYS.CACHE,
     STORAGE_KEYS.SETTINGS,
     STORAGE_KEYS.BOOKS,
   ]);
 
-  const patch: any = {};
+  const patch: Record<string, unknown> = {};
   if (!Array.isArray(current.words)) {
     patch[STORAGE_KEYS.WORDS] = [];
   } else {
     // 迁移旧格式数据
-    const migratedWords = current.words.map((word: any) => {
-      if (isOldFormat(word)) {
-        return migrateOldWordFormat(word);
+    const migratedWords = (current.words as Array<Record<string, unknown>>).map((word) => {
+      if (isOldFormat(word as unknown as Partial<Word> & { [key: string]: unknown })) {
+        return migrateOldWordFormat(word as OldWordFormat);
       }
-      return word;
+      return word as unknown as Word;
     });
     patch[STORAGE_KEYS.WORDS] = migratedWords;
   }
 
   // 确保有单词本
-  if (!Array.isArray(current[STORAGE_KEYS.BOOKS]) || current[STORAGE_KEYS.BOOKS].length === 0) {
+  if (!Array.isArray(current[STORAGE_KEYS.BOOKS]) || (current[STORAGE_KEYS.BOOKS] as unknown[]).length === 0) {
     patch[STORAGE_KEYS.BOOKS] = [{
       id: 'local_default_book',
       name: '默认',
@@ -187,10 +204,10 @@ export async function ensureDefaults(): Promise<StorageData> {
   }
 
   return {
-    words: Array.isArray(patch[STORAGE_KEYS.WORDS]) ? patch[STORAGE_KEYS.WORDS] : Array.isArray(current.words) ? current.words : [],
-    books: Array.isArray(patch[STORAGE_KEYS.BOOKS]) ? patch[STORAGE_KEYS.BOOKS] : Array.isArray(current[STORAGE_KEYS.BOOKS]) ? current[STORAGE_KEYS.BOOKS] : [],
-    cache: current.cache && !Array.isArray(current.cache) ? current.cache : {},
-    settings: patch[STORAGE_KEYS.SETTINGS],
+    words: (Array.isArray(patch[STORAGE_KEYS.WORDS]) ? patch[STORAGE_KEYS.WORDS] : Array.isArray(current.words) ? current.words : []) as Word[],
+    books: (Array.isArray(patch[STORAGE_KEYS.BOOKS]) ? patch[STORAGE_KEYS.BOOKS] : Array.isArray(current[STORAGE_KEYS.BOOKS]) ? current[STORAGE_KEYS.BOOKS] : []) as Book[],
+    cache: (current.cache && typeof current.cache === 'object' && !Array.isArray(current.cache) ? current.cache : {}) as Record<string, unknown>,
+    settings: patch[STORAGE_KEYS.SETTINGS] as Settings,
   };
 }
 
@@ -386,7 +403,7 @@ export async function getWordsByBook(bookId: string, query: string = ""): Promis
     });
 }
 
-export type CacheMap = { [key: string]: any };
+export type CacheMap = { [key: string]: unknown };
 
 export async function getCacheMap(): Promise<CacheMap> {
   const { cache } = await ensureDefaults();

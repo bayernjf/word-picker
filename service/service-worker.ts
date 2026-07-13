@@ -11,9 +11,8 @@ import {
   saveSettings,
   saveWords,
   searchWords,
-  getSyncVersion,
-  setSyncVersion,
   Word,
+  WordContext,
   Settings,
 } from '../lib/storage.js';
 import { translateWord } from '../lib/translator.js';
@@ -34,7 +33,6 @@ import {
   signInWithPassword,
   signUp,
   refreshSession as supabaseRefreshSession,
-  signOut as supabaseSignOut,
 } from '../lib/supabase.js';
 import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
@@ -87,7 +85,7 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
 
 browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   handleMessage(message as Message)
-    .then((payload) => sendResponse({ success: true, ...payload }))
+    .then((payload) => sendResponse({ success: true, ...(payload as object) }))
     .catch((error) => {
       sendResponse({
         success: false,
@@ -103,23 +101,20 @@ interface Message {
   [key: string]: unknown;
 }
 
-async function handleMessage(message: Message): Promise<any> {
+async function handleMessage(message: Message): Promise<unknown> {
   await ensureDefaults();
   logger.debug('handleMessage', { type: message?.type });
 
   switch (message?.type) {
     case MESSAGE_TYPES.SAVE_WORD:
-      return handleSaveWord(message.entry || message.word);
+      return handleSaveWord((message.entry || message.word) as Partial<Word> & { word: string; contexts?: WordContext[]; bookId?: string });
     case MESSAGE_TYPES.DELETE_WORD:
       return handleDeleteWord(String(message.id || message.wordId));
     case MESSAGE_TYPES.GET_WORDS:
-      await syncForRead();
       return { words: await searchWords(message.query as string || '') };
     case MESSAGE_TYPES.GET_BOOKS:
-      await syncForRead();
       return { books: await getBooks() };
     case MESSAGE_TYPES.GET_BOOK_WORDS:
-      await syncForRead();
       return { words: await getWordsByBook(message.bookId as string, message.query as string || '') };
     case MESSAGE_TYPES.EXPORT_WORDS:
       return handleExportWords(message.format as string, Array.isArray(message.words) ? message.words as Word[] : []);
@@ -165,6 +160,45 @@ interface SyncQueueEntry extends Word {
   id?: string;
 }
 
+interface ServerBook {
+  id: string;
+  name?: string;
+  description?: string;
+  word_count?: number;
+  icon?: string;
+  is_sync?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface ServerWord {
+  id?: string;
+  word?: string;
+  frequency?: number;
+  translation?: string;
+  chinese_translation?: string;
+  time_added?: string;
+  time_updated?: string;
+  created_at?: string;
+  updated_at?: string;
+  contexts?: WordContext[];
+  book_id?: string;
+  phonetic?: string;
+  part_of_speech?: string;
+  definition?: string;
+  synonyms?: string[];
+  examples?: Array<{ en: string; zh: string }>;
+  usage_history?: unknown[];
+  level?: string;
+  familiarity?: number;
+  sync_version?: number;
+  meta?: {
+    sourceUrl?: string;
+    sourceTitle?: string;
+    createdAt?: number;
+  };
+}
+
 interface ServerWordPayload {
   word: string;
   frequency: number;
@@ -189,7 +223,12 @@ interface ServerWordPayload {
   };
 }
 
-async function handleSaveWord(entry: any): Promise<any> {
+async function handleSaveWord(entry: Partial<Word> & { word: string; translation?: string; frequency?: number; timeAdded?: number; timeUpdated?: number; contexts?: WordContext[]; bookId?: string }): Promise<{
+  saved: boolean;
+  duplicate: boolean;
+  entry: Word;
+  sync: { ok: boolean; skipped?: boolean; queued?: boolean; queueSize: number };
+}> {
   if (!entry?.word) {
     throw new Error('单词内容不能为空');
   }
@@ -230,8 +269,8 @@ async function handleSaveWord(entry: any): Promise<any> {
       return true;
     }
 
-    return incomingContexts.every((incomingContext: any) =>
-      existingContexts.some((existingContext: any) =>
+    return incomingContexts.every((incomingContext: WordContext) =>
+      existingContexts.some((existingContext: WordContext) =>
         normalizeContextValue(existingContext?.context) === normalizeContextValue(incomingContext?.context) &&
         normalizeSourceLinkValue(existingContext) === normalizeSourceLinkValue(incomingContext)
       )
@@ -239,7 +278,7 @@ async function handleSaveWord(entry: any): Promise<any> {
   });
   const duplicate = Boolean(duplicateEntry);
 
-  if (duplicate) {
+  if (duplicate && duplicateEntry) {
     logger.info('handleSaveWord duplicate skipped', { word: entry.word });
     return {
       saved: true,
@@ -249,7 +288,7 @@ async function handleSaveWord(entry: any): Promise<any> {
     };
   }
 
-  const result = await addWord(entry);
+  const result = await addWord(entry as Omit<Word, 'bookId'> & { bookId?: string });
 
   if (result.duplicate) {
     logger.info('handleSaveWord duplicate skipped (after add)', { word: entry.word });
@@ -287,7 +326,10 @@ async function handleSaveWord(entry: any): Promise<any> {
   };
 }
 
-async function handleDeleteWord(id: string): Promise<any> {
+async function handleDeleteWord(id: string): Promise<{
+  deleted: boolean;
+  sync: FlushResult;
+}> {
   if (!id) {
     throw new Error('缺少单词 id');
   }
@@ -306,7 +348,11 @@ async function handleDeleteWord(id: string): Promise<any> {
   };
 }
 
-async function handleExportWords(format: string, words: Word[]): Promise<any> {
+async function handleExportWords(format: string, words: Word[]): Promise<{
+  format: string;
+  fileName: string;
+  data: string;
+}> {
   const normalized = String(format || 'json').toLowerCase();
 
   if (normalized === 'csv') {
@@ -335,7 +381,10 @@ function toCsv(words: Word[]): string {
           if (header === 'contextCount') {
             return csvEscape(contextCount);
           }
-          return csvEscape((word as any)[header] ?? word._legacy?.[header] ?? '');
+          const key = header as keyof Word;
+          const value = word[key];
+          const legacyValue = word._legacy?.[header as keyof NonNullable<Word['_legacy']>];
+          return csvEscape((value ?? legacyValue ?? '') as string);
         })
         .join(',')
     );
@@ -348,16 +397,26 @@ function csvEscape(value: unknown): string {
   return `"${text}"`;
 }
 
-async function handleSyncNow(): Promise<any> {
+async function handleSyncNow(): Promise<FlushResult> {
   return flushSyncQueue(await getSettings());
 }
 
-async function handleGetSyncStatus(): Promise<any> {
+interface SyncStatusResult {
+  deviceId: string;
+  syncQueueSize: number;
+  deleteQueueSize: number;
+  queueSize: number;
+  isLoggedIn: boolean;
+  user: AuthData['user'] | null;
+  lastSyncAt: number | null;
+}
+
+async function handleGetSyncStatus(): Promise<SyncStatusResult> {
   const auth = await getAuthData();
   const deviceId = await ensureDeviceId();
   const syncQueue = await getSyncQueue();
   const deleteQueue = await getDeleteQueue();
-  const loggedIn = Boolean(auth?.accessToken && auth?.refreshToken) && auth && !isAuthExpired(auth);
+  const loggedIn = Boolean(auth?.accessToken && auth?.refreshToken && auth && !isAuthExpired(auth));
 
   return {
     deviceId,
@@ -390,12 +449,12 @@ async function ensureDeviceId(): Promise<string> {
   return next;
 }
 
-async function getQueue(key: string): Promise<any[]> {
+async function getQueue<T = unknown>(key: string): Promise<T[]> {
   const current = await browser.storage.local.get([key]);
-  return Array.isArray(current?.[key]) ? current[key] : [];
+  return Array.isArray(current?.[key]) ? (current[key] as T[]) : [];
 }
 
-async function setQueue(key: string, queue: any[]): Promise<any[]> {
+async function setQueue<T = unknown>(key: string, queue: T[]): Promise<T[]> {
   await browser.storage.local.set({ [key]: queue });
   return queue;
 }
@@ -520,7 +579,7 @@ async function pullChanges(auth: AuthData, settings: Settings): Promise<void> {
   logger.info('pullChanges success', { books: bookCount, words: wordCount });
 }
 
-function mapServerBookToLocal(book: any): Book {
+function mapServerBookToLocal(book: ServerBook): Book {
   return {
     id: book.id,
     name: book.name || '默认',
@@ -528,14 +587,14 @@ function mapServerBookToLocal(book: any): Book {
     wordCount: Number(book.word_count) || 0,
     icon: book.icon || 'BookOpen',
     isSync: Boolean(book.is_sync),
-    createdAt: Date.parse(book.created_at) || Date.now(),
-    updatedAt: Date.parse(book.updated_at) || Date.now(),
+    createdAt: Date.parse(book.created_at || '') || Date.now(),
+    updatedAt: Date.parse(book.updated_at || '') || Date.now(),
   };
 }
 
-function mapServerWordToLocal(word: any): Word {
-  const timeAdded = Date.parse(word.time_added || word.created_at) || Date.now();
-  const timeUpdated = Date.parse(word.time_updated || word.updated_at) || timeAdded;
+function mapServerWordToLocal(word: ServerWord): Word {
+  const timeAdded = Date.parse(word.time_added || word.created_at || '') || Date.now();
+  const timeUpdated = Date.parse(word.time_updated || word.updated_at || '') || timeAdded;
   const examples = Array.isArray(word.examples) ? word.examples : [];
   return {
     id: word.id,
@@ -644,7 +703,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
       if (booksRes.ok) {
         const serverBooks = await booksRes.json();
         const serverSyncBook = Array.isArray(serverBooks)
-          ? serverBooks.find((b: any) => b.is_sync)
+          ? serverBooks.find((b: ServerBook) => b.is_sync)
           : null;
         if (serverSyncBook) {
           syncBook = { id: serverSyncBook.id, name: serverSyncBook.name, isSync: true };
@@ -664,8 +723,8 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     if (wordsRes.ok) {
       const serverWords = await wordsRes.json();
       if (Array.isArray(serverWords)) {
-        serverWords.forEach((word: any) => {
-          const key = `${normalizeWordValue(word.word)}::${normalizeBookValue(word.book_id || '')}`;
+        serverWords.forEach((word: ServerWord) => {
+          const key = `${normalizeWordValue(word.word || '')}::${normalizeBookValue(word.book_id || '')}`;
           serverWordsMap.set(key, {
             level: word.level || 'B2',
             familiarity: Number(word.familiarity) || 0,
@@ -690,7 +749,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
       if (existingSrs) {
         mapped.level = existingSrs.level;
         mapped.familiarity = existingSrs.familiarity;
-        (mapped as any).sync_version = existingSrs.syncVersion;
+        (mapped as ServerWordPayload & { sync_version?: number }).sync_version = existingSrs.syncVersion;
       }
       return mapped;
     })
@@ -843,7 +902,7 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
       await pushWords(currentAuth, settings);
       await pullChanges(currentAuth, settings);
     } catch (error) {
-      if (String((error as any)?.message || error) !== 'unauthorized') {
+      if (String((error as Error)?.message || error) !== 'unauthorized') {
         throw error;
       }
 
@@ -1121,7 +1180,15 @@ async function clearUserData(): Promise<void> {
   ]);
 }
 
-async function handleAuthLogin(email: string, password: string): Promise<any> {
+interface AuthResult {
+  ok: boolean;
+  error?: string;
+  user?: { email: string; id: string } | null;
+  accessToken?: string;
+  needsEmailConfirmation?: boolean;
+}
+
+async function handleAuthLogin(email: string, password: string): Promise<AuthResult> {
   const { session, error } = await signInWithPassword(email, password);
 
   if (error || !session) {
@@ -1155,7 +1222,7 @@ async function handleAuthLogin(email: string, password: string): Promise<any> {
   };
 }
 
-async function handleAuthRegister(email: string, password: string): Promise<any> {
+async function handleAuthRegister(email: string, password: string): Promise<AuthResult> {
   const { session, user, error, needsEmailConfirmation } = await signUp(email, password);
 
   if (error) {
@@ -1163,7 +1230,7 @@ async function handleAuthRegister(email: string, password: string): Promise<any>
   }
 
   if (needsEmailConfirmation || !session) {
-    return { ok: true, needsEmailConfirmation: true, user: user ? { email } : null };
+    return { ok: true, needsEmailConfirmation: true, user: user ? { email, id: user.id || '' } : null };
   }
 
   const newEmail = session.user?.email || email;
@@ -1203,7 +1270,13 @@ async function handleAuthLogout(): Promise<{ ok: boolean }> {
   return { ok: true };
 }
 
-async function handleAuthStatus(): Promise<any> {
+interface AuthStatusResult {
+  ok: boolean;
+  isLoggedIn: boolean;
+  user: AuthData['user'] | null;
+}
+
+async function handleAuthStatus(): Promise<AuthStatusResult> {
   const auth = await getAuthData();
   // 登录态已过期：清除并视为未登录
   if (auth && isAuthExpired(auth)) {
