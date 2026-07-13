@@ -4,7 +4,7 @@ name: Release
 #
 # 三种触发方式：
 #   1. 推送 v* tag → 正式发布（使用指定 tag 名）
-#   2. push 到 main 分支 → 正式发布（自动递增 minor 版本号）
+#   2. push 到 main 分支 → 正式发布（自动递增 patch 版本号）
 #   3. push 到 dev 分支 → Dev Snapshot（prerelease: true，tag 为 snapshot，
 #      每次覆盖上一个，产物始终指向最新 dev 的可用构建）
 #
@@ -58,6 +58,51 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Resolve release tag & version
+        id: resolve-tag
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          if [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
+            TAG_NAME="${GITHUB_REF_NAME}"
+            MANIFEST_VERSION="${GITHUB_REF_NAME#v}"
+            IS_PRERELEASE="false"
+            RELEASE_NAME="${GITHUB_REF_NAME}"
+            GEN_NOTES="true"
+          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
+            # Auto-bump version based on latest v* tag
+            LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
+            if [ -z "$LATEST_TAG" ]; then
+              NEW_TAG="v1.0.0"
+            else
+              BASE=${LATEST_TAG#v}
+              MAJOR=$(echo "$BASE" | cut -d. -f1)
+              MINOR=$(echo "$BASE" | cut -d. -f2)
+              PATCH=$(echo "$BASE" | cut -d. -f3)
+              NEW_PATCH=$((PATCH + 1))
+              NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+            fi
+            TAG_NAME="$NEW_TAG"
+            MANIFEST_VERSION="${NEW_TAG#v}"
+            IS_PRERELEASE="false"
+            RELEASE_NAME="$NEW_TAG"
+            GEN_NOTES="true"
+          else
+            # dev branch -> snapshot
+            TAG_NAME="snapshot"
+            # Chrome manifest version must be x.y.z.w, use date+time as build number
+            BUILD_NUM=$(date -u +%Y%m%d%H%M)
+            MANIFEST_VERSION="0.0.0.${BUILD_NUM}"
+            IS_PRERELEASE="true"
+            RELEASE_NAME="Dev Snapshot (${SHORT_SHA})"
+            GEN_NOTES="false"
+          fi
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "manifest_version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
+          echo "gen_notes=$GEN_NOTES" >> "$GITHUB_OUTPUT"
+          echo "Resolved: tag=$TAG_NAME version=$MANIFEST_VERSION prerelease=$IS_PRERELEASE"
+
       - name: Build dictionary
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
@@ -68,48 +113,11 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          RELEASE_VERSION: ${{ steps.resolve-tag.outputs.manifest_version }}
         run: npm run build
 
       - name: Pack all extensions
         run: npm run pack
-
-      - name: Resolve release tag
-        id: resolve-tag
-        run: |
-          if [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
-            TAG_NAME="${GITHUB_REF_NAME}"
-            IS_PRERELEASE="false"
-            RELEASE_NAME="${GITHUB_REF_NAME}"
-            GEN_NOTES="true"
-          elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-            # Auto-bump version based on latest v* tag
-            LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
-            if [ -z "$LATEST_TAG" ]; then
-              NEW_TAG="v1.0.0"
-            else
-              # Bump patch version: v1.2.3 -> v1.2.4
-              BASE=${LATEST_TAG#v}
-              MAJOR=$(echo "$BASE" | cut -d. -f1)
-              MINOR=$(echo "$BASE" | cut -d. -f2)
-              PATCH=$(echo "$BASE" | cut -d. -f3)
-              NEW_PATCH=$((PATCH + 1))
-              NEW_TAG="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-            fi
-            TAG_NAME="$NEW_TAG"
-            IS_PRERELEASE="false"
-            RELEASE_NAME="$NEW_TAG"
-            GEN_NOTES="true"
-          else
-            # dev branch -> snapshot
-            TAG_NAME="snapshot"
-            IS_PRERELEASE="true"
-            RELEASE_NAME="Dev Snapshot"
-            GEN_NOTES="false"
-          fi
-          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
-          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
-          echo "gen_notes=$GEN_NOTES" >> "$GITHUB_OUTPUT"
 
       - name: Upload Chrome extension
         uses: actions/upload-artifact@v4
