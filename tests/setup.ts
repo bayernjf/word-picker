@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 
-// Mock webextension-polyfill for Node.js test environment
+const storageState: Record<string, unknown> = {};
+
 vi.mock("webextension-polyfill", () => ({
   default: {
     runtime: {
@@ -18,9 +19,30 @@ vi.mock("webextension-polyfill", () => ({
     },
     storage: {
       local: {
-        get: vi.fn().mockResolvedValue({}),
-        set: vi.fn().mockResolvedValue(undefined),
-        remove: vi.fn().mockResolvedValue(undefined),
+        get: vi.fn().mockImplementation(async (keys: string | string[]) => {
+          if (Array.isArray(keys)) {
+            const result: Record<string, unknown> = {};
+            for (const key of keys) {
+              if (key in storageState) {
+                result[key] = storageState[key];
+              }
+            }
+            return result;
+          }
+          return { [keys]: storageState[keys] };
+        }),
+        set: vi.fn().mockImplementation(async (items: Record<string, unknown>) => {
+          Object.assign(storageState, items);
+        }),
+        remove: vi.fn().mockImplementation(async (keys: string | string[]) => {
+          if (Array.isArray(keys)) {
+            for (const key of keys) {
+              delete storageState[key];
+            }
+          } else {
+            delete storageState[keys];
+          }
+        }),
       },
       onChanged: {
         addListener: vi.fn(),
@@ -38,3 +60,7 @@ vi.mock("webextension-polyfill", () => ({
     },
   },
 }));
+
+export function resetStorageState(): void {
+  Object.keys(storageState).forEach(key => delete storageState[key]);
+}
