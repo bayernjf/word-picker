@@ -3,7 +3,7 @@
   "compilerOptions": {
     "outDir": "./dist/extension",
     "rootDir": ".",
-    "types": [],
+    "types": ["node", "webextension-polyfill"],
     "lib": ["ES2022", "DOM"],
     "noEmitOnError": true
   },

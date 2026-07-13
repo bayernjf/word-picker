@@ -238,7 +238,7 @@ async function autoSaveSetting(key: keyof Settings): Promise<void> {
     const response = await sendMessage({ type: "GET_SETTINGS" });
     const current = response.settings || {};
     const formEl = form as SettingsFormElements;
-    let value: any;
+    let value: string | boolean | number;
     if (key === "lookupKey") {
       value = formEl.lookupKey.value;
     } else if (key === "fireworksEffect") {

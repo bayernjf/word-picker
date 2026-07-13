@@ -17,11 +17,35 @@ const ROOT = process.cwd();
 const SRC = path.join(ROOT, "dist", "extension");
 const POLYFILL_SRC = path.join(ROOT, "node_modules", "webextension-polyfill", "dist", "browser-polyfill.js");
 
-function deepMerge(target: any, source: any): any {
+function loadEnvFile(filename: string): void {
+  const envPath = path.join(ROOT, filename);
+  if (!fs.existsSync(envPath)) return;
+  const content = fs.readFileSync(envPath, "utf-8");
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const eqIdx = trimmed.indexOf("=");
+    if (eqIdx === -1) continue;
+    const key = trimmed.slice(0, eqIdx).trim();
+    let value = trimmed.slice(eqIdx + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (!(key in process.env)) {
+      process.env[key] = value;
+    }
+  }
+}
+
+// Load .env files (priority: .env.local > .env)
+loadEnvFile(".env");
+loadEnvFile(".env.local");
+
+function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): Record<string, unknown> {
   const result = { ...target };
   for (const key of Object.keys(source)) {
     if (source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
-      result[key] = deepMerge(result[key] || {}, source[key]);
+      result[key] = deepMerge((result[key] as Record<string, unknown>) || {}, source[key] as Record<string, unknown>);
     } else {
       result[key] = source[key];
     }
@@ -49,7 +73,7 @@ function buildForBrowser(target: "chrome" | "safari"): void {
   // Merge manifests
   const baseManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.base.json"), "utf-8"));
 
-  let browserManifest: any;
+  let browserManifest: Record<string, unknown>;
   if (target === "safari") {
     browserManifest = JSON.parse(fs.readFileSync(path.join(ROOT, "manifest.safari.json"), "utf-8"));
     // Copy Safari background script (TS compiled to JS)
@@ -104,6 +128,9 @@ function rewritePolyfillImports(distDir: string): void {
   console.log("[build-cross-browser] polyfill imports rewritten");
 }
 
+const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".woff2", ".ttf", ".ico"]);
+const HTML_APP_URL_PROD = "https://word-base.pages.dev/app";
+
 function copyDirContents(src: string, dest: string): void {
   const entries = fs.readdirSync(src, { withFileTypes: true });
   for (const entry of entries) {
@@ -114,9 +141,51 @@ function copyDirContents(src: string, dest: string): void {
       copyDirContents(srcPath, destPath);
     } else {
       fs.mkdirSync(path.dirname(destPath), { recursive: true });
-      fs.copyFileSync(srcPath, destPath);
+      const ext = path.extname(entry.name).toLowerCase();
+      if (BINARY_EXTENSIONS.has(ext)) {
+        const content = fs.readFileSync(srcPath);
+        fs.writeFileSync(destPath, content);
+      } else {
+        let content = fs.readFileSync(srcPath, "utf-8");
+        content = replaceEnvVars(content, ext === ".html");
+        fs.writeFileSync(destPath, content);
+      }
     }
   }
+}
+
+function replaceEnvVars(content: string, isHtml: boolean = false): string {
+  const supabaseUrl = process.env.SUPABASE_URL ?? '';
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? '';
+  const syncBaseUrl = process.env.SYNC_BASE_URL ?? '';
+  const wordBaseAppUrl = process.env.WORD_BASE_APP_URL ?? '';
+  const prodSyncBase = "https://word-base.pages.dev";
+  const prodAppUrl = "https://word-base.pages.dev/app";
+
+  // Replace readEnv/readBuildEnv calls in supabase.ts
+  content = content.replace(/read(Build)?Env\(['"]SUPABASE_URL['"]\)/g, JSON.stringify(supabaseUrl));
+  content = content.replace(/read(Build)?Env\(['"]SUPABASE_ANON_KEY['"]\)/g, JSON.stringify(supabaseAnonKey));
+  // Replace constants.ts literal defaults with env values (only when env is provided)
+  if (syncBaseUrl) {
+    content = content.replace(
+      new RegExp(`export const DEFAULT_SYNC_BASE_URL = ${JSON.stringify(prodSyncBase)}`),
+      `export const DEFAULT_SYNC_BASE_URL = ${JSON.stringify(syncBaseUrl)}`
+    );
+  }
+  if (wordBaseAppUrl) {
+    content = content.replace(
+      new RegExp(`export const WORD_BASE_APP_URL = ${JSON.stringify(prodAppUrl)}`),
+      `export const WORD_BASE_APP_URL = ${JSON.stringify(wordBaseAppUrl)}`
+    );
+  }
+  // Legacy process.env references
+  content = content.replace(/process\.env\.SUPABASE_URL/g, JSON.stringify(supabaseUrl));
+  content = content.replace(/process\.env\.SUPABASE_ANON_KEY/g, JSON.stringify(supabaseAnonKey));
+  // Replace hardcoded WordBase app URLs in HTML files only
+  if (isHtml && wordBaseAppUrl) {
+    content = content.replace(new RegExp(HTML_APP_URL_PROD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), wordBaseAppUrl);
+  }
+  return content;
 }
 
 function main(): void {

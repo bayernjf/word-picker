@@ -5,6 +5,16 @@ dist/
 coverage/
 .vitest/
 
+# Playwright e2e test artifacts
+test-results/
+playwright-report/
+/playwright/.cache/
+
+# Environment variables
+# Copy .env.example to .env.local and fill in your values
+.env
+.env.local
+
 # 离线词库完整版原料（体积大，不入库；仅需 ecdict.mini.csv 即可构建）
 # 如需更新词库到最新版本，下载完整版 ecdict.csv 放到 data/ 后执行 npm run build:dict
 data/ecdict.csv

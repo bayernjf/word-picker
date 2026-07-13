@@ -1,5 +1,18 @@
-export const SUPABASE_URL = 'https://zzmolktkgorerpaoglpr.supabase.co';
-export const SUPABASE_ANON_KEY = 'sb_publishable_uRzBziAotom_ZoJdGR02uQ_nTLK-VsN';
+function readEnv(key: string): string | undefined {
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key];
+  }
+
+  const metaEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
+  if (typeof import.meta !== 'undefined' && metaEnv) {
+    return metaEnv?.[key];
+  }
+
+  return undefined;
+}
+
+export const SUPABASE_URL = readEnv('SUPABASE_URL') ?? '';
+export const SUPABASE_ANON_KEY = readEnv('SUPABASE_ANON_KEY') ?? '';
 
 interface SupabaseSession {
   access_token: string;
