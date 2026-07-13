@@ -5,7 +5,7 @@ import {
   normalizeSourceLinkValue,
 } from "./utils.js";
 import { DEFAULT_SYNC_BASE_URL } from "./constants.js";
-import type { LookupKey, Platform } from "./constants.js";
+import type { LookupKey } from "./constants.js";
 import type { Book } from "./utils.js";
 
 export interface WordContext {
@@ -224,6 +224,13 @@ export async function ensureDefaults(): Promise<StorageData> {
       mac: keys.mac || "Control",
       win: keys.win || "Control",
     };
+  }
+
+  if (typeof settingsPatch.syncBaseUrl === 'string') {
+    const url = settingsPatch.syncBaseUrl.replace(/\/+$/, '');
+    if (url.endsWith('/app')) {
+      settingsPatch.syncBaseUrl = url.slice(0, -4) || DEFAULT_SYNC_BASE_URL;
+    }
   }
 
   if (Object.keys(patch).length > 0) {
