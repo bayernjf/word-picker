@@ -1,6 +1,5 @@
 import { createLogger } from "./logger.js";
 import type { Settings } from "./storage.js";
-import type { OfflineTranslationResult } from "./offlineDict.js";
 
 const logger = createLogger("translator");
 
@@ -90,7 +89,43 @@ interface YoudaoResult {
   meaning: string;
 }
 
+// 翻译 API 并发限流器
+const MAX_CONCURRENT_TRANSLATE = 3;
+let concurrentRequests = 0;
+const requestQueue: Array<() => void> = [];
+
+function acquireTranslateSlot(): Promise<void> {
+  return new Promise((resolve) => {
+    if (concurrentRequests < MAX_CONCURRENT_TRANSLATE) {
+      concurrentRequests++;
+      resolve();
+    } else {
+      requestQueue.push(() => {
+        concurrentRequests++;
+        resolve();
+      });
+    }
+  });
+}
+
+function releaseTranslateSlot(): void {
+  concurrentRequests--;
+  if (requestQueue.length > 0) {
+    const next = requestQueue.shift();
+    next?.();
+  }
+}
+
 async function translateWithFreeApis(word: string, useYoudao: boolean = true): Promise<TranslationResult> {
+  await acquireTranslateSlot();
+  try {
+    return doTranslateWithFreeApis(word, useYoudao);
+  } finally {
+    releaseTranslateSlot();
+  }
+}
+
+async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true): Promise<TranslationResult> {
   const fallback = buildFallbackTranslation(word);
   const [translationResult, dictionaryResult, youdaoResult] = await Promise.allSettled([
     withTimeout(fetchFreeTranslation(word), 2500),
@@ -204,10 +239,16 @@ async function fetchYoudaoDict(word: string): Promise<YoudaoResult | null> {
   const payload = await response.json();
 
   // 优先取基础词典释义（ec：英汉），结构最规整
-  const ecTrs = payload?.ec?.word?.[0]?.trs;
+  const ecTrs = payload?.ec?.word?.[0]?.trs as unknown[] | undefined;
   if (Array.isArray(ecTrs) && ecTrs.length > 0) {
     const meanings = ecTrs
-      .map((item: any) => String(item?.tr?.[0]?.l?.i?.[0] || "").trim())
+      .map((item) => {
+        const itemObj = item as Record<string, unknown>;
+        const trArr = itemObj.tr as unknown[] | undefined;
+        const lObj = trArr?.[0] as Record<string, unknown> | undefined;
+        const iArr = lObj?.i as unknown[] | undefined;
+        return String(iArr?.[0] || "").trim();
+      })
       .filter(Boolean);
     if (meanings.length > 0) {
       return { meaning: meanings.join("；") };
@@ -215,14 +256,15 @@ async function fetchYoudaoDict(word: string): Promise<YoudaoResult | null> {
   }
 
   // 兜底取网络释义（web_trans），按 support 选最高票
-  const webTrans = payload?.web_trans?.["web-translation"];
+  const webTrans = payload?.web_trans?.["web-translation"] as unknown[] | undefined;
   if (Array.isArray(webTrans) && webTrans.length > 0) {
     const sameEntry =
-      webTrans.find((item: any) => item?.["@same"] === "true") || webTrans[0];
-    const trans = sameEntry?.trans;
+      webTrans.find((item) => (item as Record<string, unknown>)?.["@same"] === "true") || webTrans[0];
+    const sameEntryObj = sameEntry as Record<string, unknown> | undefined;
+    const trans = sameEntryObj?.trans as unknown[] | undefined;
     if (Array.isArray(trans) && trans.length > 0) {
       const meanings = trans
-        .map((item: any) => String(item?.value || "").trim())
+        .map((item) => String((item as Record<string, unknown>)?.value || "").trim())
         .filter(Boolean)
         .slice(0, 4);
       if (meanings.length > 0) {

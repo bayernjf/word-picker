@@ -1,9 +1,7 @@
-interface Window {
-  __WordPickerShared: {
-    escapeHtml: (value: unknown) => string;
-    sendMessage: (message: object) => Promise<any>;
-    createLogger: (namespace: string) => Logger;
-  };
+interface SendMessageResponse {
+  success?: boolean;
+  error?: string;
+  [key: string]: unknown;
 }
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -98,8 +96,8 @@ function createLogger(namespace: string): Logger {
       .replace(/'/g, "&#39;");
   }
 
-  function sendMessage(message: object): Promise<any> {
-    return browser.runtime.sendMessage(message).then((response: any) => {
+  function sendMessage(message: object): Promise<SendMessageResponse> {
+    return browser.runtime.sendMessage(message).then((response: SendMessageResponse) => {
       if (!response?.success) {
         throw new Error(response?.error || "扩展消息请求失败");
       }
@@ -107,7 +105,7 @@ function createLogger(namespace: string): Logger {
     });
   }
 
-  window.__WordPickerShared = {
+  (window as unknown as { __WordPickerShared: { escapeHtml: (value: unknown) => string; sendMessage: (message: object) => Promise<SendMessageResponse>; createLogger: (namespace: string) => Logger } }).__WordPickerShared = {
     escapeHtml,
     sendMessage,
     createLogger,

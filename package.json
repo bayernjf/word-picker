@@ -9,6 +9,8 @@
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "npm run build:chrome && npx playwright test",
+    "test:e2e:headed": "npm run build:chrome && npx playwright test --headed",
     "build:ts": "tsc -p tsconfig.extension.json && tsc -p tsconfig.scripts.json",
     "build": "npm run build:ts && node dist/scripts/build-cross-browser.js all",
     "build:chrome": "npm run build:ts && node dist/scripts/build-cross-browser.js chrome",
@@ -24,6 +26,7 @@
   "license": "MIT",
   "devDependencies": {
     "@eslint/js": "^9.13.0",
+    "@playwright/test": "^1.61.1",
     "@types/node": "^26.0.1",
     "@types/sharp": "^0.31.1",
     "@types/webextension-polyfill": "^0.12.5",

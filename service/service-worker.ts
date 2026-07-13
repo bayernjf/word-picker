@@ -11,9 +11,8 @@ import {
   saveSettings,
   saveWords,
   searchWords,
-  getSyncVersion,
-  setSyncVersion,
   Word,
+  WordContext,
   Settings,
 } from '../lib/storage.js';
 import { translateWord } from '../lib/translator.js';
@@ -34,7 +33,6 @@ import {
   signInWithPassword,
   signUp,
   refreshSession as supabaseRefreshSession,
-  signOut as supabaseSignOut,
 } from '../lib/supabase.js';
 import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
@@ -45,8 +43,26 @@ const STORAGE_DEVICE_ID = 'deviceId';
 const STORAGE_SYNC_QUEUE = 'syncQueue';
 const STORAGE_DELETE_QUEUE = 'deleteQueue';
 const STORAGE_AUTH = 'authData';
+const STORAGE_SYNC_LOCK = 'syncLock';
 
 let isSyncing = false;
+
+// 同步锁持久化：Service Worker 被系统回收后恢复状态
+async function syncLockAcquire(): Promise<boolean> {
+  const data = await browser.storage.local.get([STORAGE_SYNC_LOCK]);
+  const locked = Boolean(data?.[STORAGE_SYNC_LOCK]);
+  if (locked) {
+    return false;
+  }
+  await browser.storage.local.set({ [STORAGE_SYNC_LOCK]: true });
+  isSyncing = true;
+  return true;
+}
+
+async function syncLockRelease(): Promise<void> {
+  isSyncing = false;
+  await browser.storage.local.remove([STORAGE_SYNC_LOCK]);
+}
 
 browser.runtime.onInstalled.addListener(() => {
   void ensureDefaults();
@@ -69,7 +85,7 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
 
 browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   handleMessage(message as Message)
-    .then((payload) => sendResponse({ success: true, ...payload }))
+    .then((payload) => sendResponse({ success: true, ...(payload as object) }))
     .catch((error) => {
       sendResponse({
         success: false,
@@ -85,23 +101,20 @@ interface Message {
   [key: string]: unknown;
 }
 
-async function handleMessage(message: Message): Promise<any> {
+async function handleMessage(message: Message): Promise<unknown> {
   await ensureDefaults();
   logger.debug('handleMessage', { type: message?.type });
 
   switch (message?.type) {
     case MESSAGE_TYPES.SAVE_WORD:
-      return handleSaveWord(message.entry || message.word);
+      return handleSaveWord((message.entry || message.word) as Partial<Word> & { word: string; contexts?: WordContext[]; bookId?: string });
     case MESSAGE_TYPES.DELETE_WORD:
       return handleDeleteWord(String(message.id || message.wordId));
     case MESSAGE_TYPES.GET_WORDS:
-      await syncForRead();
       return { words: await searchWords(message.query as string || '') };
     case MESSAGE_TYPES.GET_BOOKS:
-      await syncForRead();
       return { books: await getBooks() };
     case MESSAGE_TYPES.GET_BOOK_WORDS:
-      await syncForRead();
       return { words: await getWordsByBook(message.bookId as string, message.query as string || '') };
     case MESSAGE_TYPES.EXPORT_WORDS:
       return handleExportWords(message.format as string, Array.isArray(message.words) ? message.words as Word[] : []);
@@ -147,6 +160,45 @@ interface SyncQueueEntry extends Word {
   id?: string;
 }
 
+interface ServerBook {
+  id: string;
+  name?: string;
+  description?: string;
+  word_count?: number;
+  icon?: string;
+  is_sync?: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface ServerWord {
+  id?: string;
+  word?: string;
+  frequency?: number;
+  translation?: string;
+  chinese_translation?: string;
+  time_added?: string;
+  time_updated?: string;
+  created_at?: string;
+  updated_at?: string;
+  contexts?: WordContext[];
+  book_id?: string;
+  phonetic?: string;
+  part_of_speech?: string;
+  definition?: string;
+  synonyms?: string[];
+  examples?: Array<{ en: string; zh: string }>;
+  usage_history?: unknown[];
+  level?: string;
+  familiarity?: number;
+  sync_version?: number;
+  meta?: {
+    sourceUrl?: string;
+    sourceTitle?: string;
+    createdAt?: number;
+  };
+}
+
 interface ServerWordPayload {
   word: string;
   frequency: number;
@@ -171,7 +223,12 @@ interface ServerWordPayload {
   };
 }
 
-async function handleSaveWord(entry: any): Promise<any> {
+async function handleSaveWord(entry: Partial<Word> & { word: string; translation?: string; frequency?: number; timeAdded?: number; timeUpdated?: number; contexts?: WordContext[]; bookId?: string }): Promise<{
+  saved: boolean;
+  duplicate: boolean;
+  entry: Word;
+  sync: { ok: boolean; skipped?: boolean; queued?: boolean; queueSize: number };
+}> {
   if (!entry?.word) {
     throw new Error('单词内容不能为空');
   }
@@ -212,8 +269,8 @@ async function handleSaveWord(entry: any): Promise<any> {
       return true;
     }
 
-    return incomingContexts.every((incomingContext: any) =>
-      existingContexts.some((existingContext: any) =>
+    return incomingContexts.every((incomingContext: WordContext) =>
+      existingContexts.some((existingContext: WordContext) =>
         normalizeContextValue(existingContext?.context) === normalizeContextValue(incomingContext?.context) &&
         normalizeSourceLinkValue(existingContext) === normalizeSourceLinkValue(incomingContext)
       )
@@ -221,7 +278,7 @@ async function handleSaveWord(entry: any): Promise<any> {
   });
   const duplicate = Boolean(duplicateEntry);
 
-  if (duplicate) {
+  if (duplicate && duplicateEntry) {
     logger.info('handleSaveWord duplicate skipped', { word: entry.word });
     return {
       saved: true,
@@ -231,7 +288,7 @@ async function handleSaveWord(entry: any): Promise<any> {
     };
   }
 
-  const result = await addWord(entry);
+  const result = await addWord(entry as Omit<Word, 'bookId'> & { bookId?: string });
 
   if (result.duplicate) {
     logger.info('handleSaveWord duplicate skipped (after add)', { word: entry.word });
@@ -269,7 +326,10 @@ async function handleSaveWord(entry: any): Promise<any> {
   };
 }
 
-async function handleDeleteWord(id: string): Promise<any> {
+async function handleDeleteWord(id: string): Promise<{
+  deleted: boolean;
+  sync: FlushResult;
+}> {
   if (!id) {
     throw new Error('缺少单词 id');
   }
@@ -288,7 +348,11 @@ async function handleDeleteWord(id: string): Promise<any> {
   };
 }
 
-async function handleExportWords(format: string, words: Word[]): Promise<any> {
+async function handleExportWords(format: string, words: Word[]): Promise<{
+  format: string;
+  fileName: string;
+  data: string;
+}> {
   const normalized = String(format || 'json').toLowerCase();
 
   if (normalized === 'csv') {
@@ -317,7 +381,10 @@ function toCsv(words: Word[]): string {
           if (header === 'contextCount') {
             return csvEscape(contextCount);
           }
-          return csvEscape((word as any)[header] ?? word._legacy?.[header] ?? '');
+          const key = header as keyof Word;
+          const value = word[key];
+          const legacyValue = word._legacy?.[header as keyof NonNullable<Word['_legacy']>];
+          return csvEscape((value ?? legacyValue ?? '') as string);
         })
         .join(',')
     );
@@ -330,16 +397,26 @@ function csvEscape(value: unknown): string {
   return `"${text}"`;
 }
 
-async function handleSyncNow(): Promise<any> {
+async function handleSyncNow(): Promise<FlushResult> {
   return flushSyncQueue(await getSettings());
 }
 
-async function handleGetSyncStatus(): Promise<any> {
+interface SyncStatusResult {
+  deviceId: string;
+  syncQueueSize: number;
+  deleteQueueSize: number;
+  queueSize: number;
+  isLoggedIn: boolean;
+  user: AuthData['user'] | null;
+  lastSyncAt: number | null;
+}
+
+async function handleGetSyncStatus(): Promise<SyncStatusResult> {
   const auth = await getAuthData();
   const deviceId = await ensureDeviceId();
   const syncQueue = await getSyncQueue();
   const deleteQueue = await getDeleteQueue();
-  const loggedIn = Boolean(auth?.accessToken && auth?.refreshToken) && auth && !isAuthExpired(auth);
+  const loggedIn = Boolean(auth?.accessToken && auth?.refreshToken && auth && !isAuthExpired(auth));
 
   return {
     deviceId,
@@ -372,12 +449,12 @@ async function ensureDeviceId(): Promise<string> {
   return next;
 }
 
-async function getQueue(key: string): Promise<any[]> {
+async function getQueue<T = unknown>(key: string): Promise<T[]> {
   const current = await browser.storage.local.get([key]);
-  return Array.isArray(current?.[key]) ? current[key] : [];
+  return Array.isArray(current?.[key]) ? (current[key] as T[]) : [];
 }
 
-async function setQueue(key: string, queue: any[]): Promise<any[]> {
+async function setQueue<T = unknown>(key: string, queue: T[]): Promise<T[]> {
   await browser.storage.local.set({ [key]: queue });
   return queue;
 }
@@ -502,7 +579,7 @@ async function pullChanges(auth: AuthData, settings: Settings): Promise<void> {
   logger.info('pullChanges success', { books: bookCount, words: wordCount });
 }
 
-function mapServerBookToLocal(book: any): Book {
+function mapServerBookToLocal(book: ServerBook): Book {
   return {
     id: book.id,
     name: book.name || '默认',
@@ -510,14 +587,14 @@ function mapServerBookToLocal(book: any): Book {
     wordCount: Number(book.word_count) || 0,
     icon: book.icon || 'BookOpen',
     isSync: Boolean(book.is_sync),
-    createdAt: Date.parse(book.created_at) || Date.now(),
-    updatedAt: Date.parse(book.updated_at) || Date.now(),
+    createdAt: Date.parse(book.created_at || '') || Date.now(),
+    updatedAt: Date.parse(book.updated_at || '') || Date.now(),
   };
 }
 
-function mapServerWordToLocal(word: any): Word {
-  const timeAdded = Date.parse(word.time_added || word.created_at) || Date.now();
-  const timeUpdated = Date.parse(word.time_updated || word.updated_at) || timeAdded;
+function mapServerWordToLocal(word: ServerWord): Word {
+  const timeAdded = Date.parse(word.time_added || word.created_at || '') || Date.now();
+  const timeUpdated = Date.parse(word.time_updated || word.updated_at || '') || timeAdded;
   const examples = Array.isArray(word.examples) ? word.examples : [];
   return {
     id: word.id,
@@ -614,12 +691,10 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
 
   const baseUrl = normalizeBaseUrl(settings);
 
-  // 从缓存的单词本中查找同步单词本，为缺少 bookId 的条目自动分配
   let syncBook: Book | null = null;
   const cachedBooks = await getBooks();
   syncBook = selectPreferredSyncBook(cachedBooks);
 
-  // 如果缓存中没有同步单词本，尝试从服务器获取
   if (!syncBook) {
     try {
       const booksRes = await fetch(`${baseUrl}/api/v1/books`, {
@@ -628,11 +703,10 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
       if (booksRes.ok) {
         const serverBooks = await booksRes.json();
         const serverSyncBook = Array.isArray(serverBooks)
-          ? serverBooks.find((b: any) => b.is_sync)
+          ? serverBooks.find((b: ServerBook) => b.is_sync)
           : null;
         if (serverSyncBook) {
           syncBook = { id: serverSyncBook.id, name: serverSyncBook.name, isSync: true };
-          // 同时更新本地缓存
           await saveBooks(serverBooks.map(mapServerBookToLocal));
         }
       }
@@ -641,13 +715,41 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     }
   }
 
+  const serverWordsMap = new Map<string, { level: string; familiarity: number; syncVersion: number }>();
+  try {
+    const wordsRes = await fetch(`${baseUrl}/api/v1/words`, {
+      headers: { Authorization: `Bearer ${auth.accessToken}` },
+    });
+    if (wordsRes.ok) {
+      const serverWords = await wordsRes.json();
+      if (Array.isArray(serverWords)) {
+        serverWords.forEach((word: ServerWord) => {
+          const key = `${normalizeWordValue(word.word || '')}::${normalizeBookValue(word.book_id || '')}`;
+          serverWordsMap.set(key, {
+            level: word.level || 'B2',
+            familiarity: Number(word.familiarity) || 0,
+            syncVersion: Number(word.sync_version) || 0,
+          });
+        });
+      }
+    }
+  } catch (err) {
+    logger.warn('[pushWords] 无法从服务器获取已有单词:', (err as Error).message);
+  }
+
   const payload = syncQueue
     .map((item) => {
       const mapped = mapLocalWordToServer(item);
       const bookId = mapped.book_id;
-      // 自动分配 book_id：如果未设置或是无效值，使用缓存中的同步单词本 ID
       if ((!bookId || bookId === 'local_default_book' || bookId.length < 10) && syncBook) {
         mapped.book_id = syncBook.id;
+      }
+      const key = `${normalizeWordValue(mapped.word)}::${normalizeBookValue(mapped.book_id)}`;
+      const existingSrs = serverWordsMap.get(key);
+      if (existingSrs) {
+        mapped.level = existingSrs.level;
+        mapped.familiarity = existingSrs.familiarity;
+        (mapped as ServerWordPayload & { sync_version?: number }).sync_version = existingSrs.syncVersion;
       }
       return mapped;
     })
@@ -661,7 +763,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
         list[index] = item;
       }
       return list;
-    }, [] as ServerWordPayload[]); // 合并同一单词/单词本的重复推送，避免服务端 upsert 冲突。
+    }, [] as ServerWordPayload[]);
 
   if (payload.length === 0) {
     logger.warn('[pushWords] 无法同步单词：没有可用的 book_id，已缓存待下次同步');
@@ -687,22 +789,59 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     throw new Error(text || 'word_sync_failed');
   }
 
-  // 只清除已成功同步的词条
-  const syncedWordKeys = new Set(
-    payload.map((item) => `${normalizeWordValue(item.word)}::${normalizeBookValue(item.book_id)}`)
-  );
-  if (syncedWordKeys.size > 0) {
+  // 清除已同步的队列项：通过匹配 word + bookId 组合
+  const syncedPairs = new Set(payload.map((item) => `${normalizeWordValue(item.word)}::${normalizeBookValue(item.book_id)}`));
+  if (syncedPairs.size > 0) {
     await setSyncQueue(
       syncQueue.filter((item) => {
-        const bookId = item.bookId || syncBook?.id || '';
-        const key = `${normalizeWordValue(item.word)}::${normalizeBookValue(bookId)}`;
-        return !syncedWordKeys.has(key);
+        const pair = `${normalizeWordValue(item.word)}::${normalizeBookValue(item.bookId || '')}`;
+        return !syncedPairs.has(pair);
       })
     );
-    logger.info(`[pushWords] 同步完成，清除 ${syncedWordKeys.size} 条，队列剩余 ${Math.max(0, syncQueue.length - syncedWordKeys.size)} 条`);
+    logger.info(`[pushWords] 同步完成，清除 ${syncedPairs.size} 条，队列剩余 ${(await getSyncQueue()).length} 条`);
   }
 
   return { ok: true, processed: payload.length, queueSize: (await getSyncQueue()).length };
+}
+
+async function ensureDefaultBookOnServer(accessToken: string, settings: Settings): Promise<void> {
+  const baseUrl = normalizeBaseUrl(settings);
+  const booksRes = await fetch(`${baseUrl}/api/v1/books`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!booksRes.ok) {
+    throw new Error('failed_to_fetch_books');
+  }
+
+  const serverBooks = await booksRes.json();
+  const hasAnyBook = Array.isArray(serverBooks) && serverBooks.length > 0;
+
+  if (!hasAnyBook) {
+    const createRes = await fetch(`${baseUrl}/api/v1/books`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        name: '默认',
+        description: '默认单词本',
+        is_sync: true,
+      }),
+    });
+
+    if (createRes.ok) {
+      const newBook = await createRes.json();
+      await saveBooks([mapServerBookToLocal(newBook)]);
+      logger.info('[ensureDefaultBookOnServer] 默认单词本创建成功:', newBook.id);
+    } else {
+      const text = await createRes.text();
+      throw new Error(`failed_to_create_default_book: ${text}`);
+    }
+  } else {
+    await saveBooks(serverBooks.map(mapServerBookToLocal));
+  }
 }
 
 interface FlushResult {
@@ -738,8 +877,14 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
     return { ok: true, skipped: true, queueSize };
   }
 
+  // 尝试获取同步锁
+  const acquired = await syncLockAcquire();
+  if (!acquired) {
+    logger.debug('flushSyncQueue skipped (lock held by another process)');
+    return { ok: true, skipped: true, queueSize };
+  }
+
   logger.debug('flushSyncQueue started', { syncQueue: syncQueue.length, deleteQueue: deleteQueue.length });
-  isSyncing = true;
 
   try {
     setSupabaseSession({
@@ -757,7 +902,7 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
       await pushWords(currentAuth, settings);
       await pullChanges(currentAuth, settings);
     } catch (error) {
-      if (String((error as any)?.message || error) !== 'unauthorized') {
+      if (String((error as Error)?.message || error) !== 'unauthorized') {
         throw error;
       }
 
@@ -820,7 +965,7 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } finally {
-    isSyncing = false;
+    await syncLockRelease();
   }
 }
 
@@ -851,8 +996,84 @@ const STORAGE_REMEMBERED_CREDENTIALS = 'rememberedCredentials';
 
 interface RememberedCredentials {
   email: string;
+  /** 简单 XOR 加密的密码（非安全级别，仅防直接读取） */
   password: string;
   savedAt: number;
+}
+
+/** 密码编码（使用 PBKDF2 派生密钥 + AES-GCM 加密） */
+async function encodePassword(pwd: string): Promise<string> {
+  if (!pwd) return '';
+  try {
+    const deviceId = await ensureDeviceId();
+    const encoder = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(deviceId),
+      'PBKDF2',
+      false,
+      ['deriveKey']
+    );
+    const aesKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: encoder.encode('wordpicker-salt'), iterations: 100000, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const encrypted = await crypto.subtle.encrypt(
+      { name: 'AES-GCM', iv },
+      aesKey,
+      encoder.encode(pwd)
+    );
+    return btoa(JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) }));
+  } catch {
+    // 降级：使用设备 ID 派生的简单 XOR
+    const deviceId = await ensureDeviceId();
+    const deviceKey = deviceId.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0) % 256;
+    return btoa(pwd.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ deviceKey)).join(''));
+  }
+}
+
+/** 密码解码 */
+async function decodePassword(encoded: string): Promise<string> {
+  if (!encoded) return '';
+  try {
+    const parsed = JSON.parse(atob(encoded));
+    const deviceId = await ensureDeviceId();
+    const encoder = new TextEncoder();
+    const keyMaterial = await crypto.subtle.importKey(
+      'raw',
+      encoder.encode(deviceId),
+      'PBKDF2',
+      false,
+      ['deriveKey']
+    );
+    const aesKey = await crypto.subtle.deriveKey(
+      { name: 'PBKDF2', salt: encoder.encode('wordpicker-salt'), iterations: 100000, hash: 'SHA-256' },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    );
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-GCM', iv: new Uint8Array(parsed.iv) },
+      aesKey,
+      new Uint8Array(parsed.data)
+    );
+    return new TextDecoder().decode(decrypted);
+  } catch {
+    // 降级：尝试简单 XOR
+    try {
+      const deviceId = await ensureDeviceId();
+      const deviceKey = deviceId.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0) % 256;
+      const decoded = atob(encoded);
+      return decoded.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ deviceKey)).join('');
+    } catch {
+      return '';
+    }
+  }
 }
 
 function isRememberedCredentials(value: unknown): value is RememberedCredentials {
@@ -871,12 +1092,13 @@ async function getRememberedCredentials(): Promise<RememberedCredentials | null>
   return isRememberedCredentials(cred) ? cred : null;
 }
 
-// 保存登录凭证（email 始终保留以便回填；password 仅在勾选记住时保留）
+// 保存登录凭证（email 始终保留以便回填；password 仅在勾选记住时保留，加密存储）
 async function saveRememberedCredentials(email: string, password: string, remember: boolean): Promise<void> {
+  const encryptedPassword = remember ? await encodePassword(password || '') : '';
   await browser.storage.local.set({
     [STORAGE_REMEMBERED_CREDENTIALS]: {
       email: email || '',
-      password: remember ? (password || '') : '',
+      password: encryptedPassword,
       savedAt: Date.now(),
     },
   });
@@ -925,7 +1147,9 @@ async function handleAuthGetCredentials(): Promise<{ ok: boolean; email: string;
     });
     return { ok: true, email: cred.email || '', password: '' };
   }
-  return { ok: true, email: cred.email || '', password: expired ? '' : (cred.password || '') };
+  // 解码存储的密码
+  const decodedPassword = cred.password ? await decodePassword(cred.password) : '';
+  return { ok: true, email: cred.email || '', password: expired ? '' : decodedPassword };
 }
 
 // 存储当前登录用户的唯一标识（用于检测用户切换）
@@ -950,10 +1174,21 @@ async function clearUserData(): Promise<void> {
     'deleteQueue',
     STORAGE_SYNC_QUEUE,
     STORAGE_DELETE_QUEUE,
+    STORAGE_AUTH,
+    STORAGE_REMEMBERED_CREDENTIALS,
+    STORAGE_CURRENT_USER_EMAIL,
   ]);
 }
 
-async function handleAuthLogin(email: string, password: string): Promise<any> {
+interface AuthResult {
+  ok: boolean;
+  error?: string;
+  user?: { email: string; id: string } | null;
+  accessToken?: string;
+  needsEmailConfirmation?: boolean;
+}
+
+async function handleAuthLogin(email: string, password: string): Promise<AuthResult> {
   const { session, error } = await signInWithPassword(email, password);
 
   if (error || !session) {
@@ -987,7 +1222,7 @@ async function handleAuthLogin(email: string, password: string): Promise<any> {
   };
 }
 
-async function handleAuthRegister(email: string, password: string): Promise<any> {
+async function handleAuthRegister(email: string, password: string): Promise<AuthResult> {
   const { session, user, error, needsEmailConfirmation } = await signUp(email, password);
 
   if (error) {
@@ -995,7 +1230,7 @@ async function handleAuthRegister(email: string, password: string): Promise<any>
   }
 
   if (needsEmailConfirmation || !session) {
-    return { ok: true, needsEmailConfirmation: true, user: user ? { email } : null };
+    return { ok: true, needsEmailConfirmation: true, user: user ? { email, id: user.id || '' } : null };
   }
 
   const newEmail = session.user?.email || email;
@@ -1011,6 +1246,13 @@ async function handleAuthRegister(email: string, password: string): Promise<any>
   });
   await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
+
+  try {
+    await ensureDefaultBookOnServer(session.access_token, settings);
+  } catch (err) {
+    logger.warn('[handleAuthRegister] 创建默认单词本失败:', (err as Error).message);
+  }
+
   await flushSyncQueue(settings);
 
   return {
@@ -1028,7 +1270,13 @@ async function handleAuthLogout(): Promise<{ ok: boolean }> {
   return { ok: true };
 }
 
-async function handleAuthStatus(): Promise<any> {
+interface AuthStatusResult {
+  ok: boolean;
+  isLoggedIn: boolean;
+  user: AuthData['user'] | null;
+}
+
+async function handleAuthStatus(): Promise<AuthStatusResult> {
   const auth = await getAuthData();
   // 登录态已过期：清除并视为未登录
   if (auth && isAuthExpired(auth)) {

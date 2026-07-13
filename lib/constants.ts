@@ -1,4 +1,9 @@
-export const DEFAULT_SYNC_BASE_URL = "https://word-base.pages.dev/app";
+// 注意：这些常量在构建时由 build-cross-browser.ts 的 replaceEnvVars 直接替换为字面量值。
+// 本地构建从 .env.local 读取，生产构建使用 fallback 默认值（https://word-base.pages.dev）。
+// 不要用函数包裹，避免运行时在 Service Worker 中访问 import.meta 导致异常。
+
+// 同步 API 地址
+export const DEFAULT_SYNC_BASE_URL = "https://word-base.pages.dev";
 
 // word-base 前端地址（登录/注册页面）
 export const WORD_BASE_APP_URL = "https://word-base.pages.dev/app";
