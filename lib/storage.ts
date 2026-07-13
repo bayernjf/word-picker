@@ -5,6 +5,7 @@ import {
   normalizeSourceLinkValue,
 } from "./utils.js";
 import { DEFAULT_SYNC_BASE_URL } from "./constants.js";
+import type { LookupKey, Platform } from "./constants.js";
 import type { Book } from "./utils.js";
 
 export interface WordContext {
@@ -40,8 +41,15 @@ export interface Word {
   id?: string;
 }
 
+export type { LookupKey, Platform } from "./constants.js";
+
+export interface PerPlatformLookupKeys {
+  mac: LookupKey;
+  win: LookupKey;
+}
+
 export interface Settings {
-  lookupKey: "Control" | "Meta" | "Alt" | "Shift";
+  lookupKeys: PerPlatformLookupKeys;
   hoverDelay: number;
   translator: "free" | "fallback";
   useYoudaoDict: boolean;
@@ -54,7 +62,10 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  lookupKey: "Control",
+  lookupKeys: {
+    mac: "Control",
+    win: "Control",
+  },
   hoverDelay: 100,
   translator: "free",
   useYoudaoDict: true,
@@ -198,6 +209,22 @@ export async function ensureDefaults(): Promise<StorageData> {
     ...DEFAULT_SETTINGS,
     ...(current.settings || {}),
   };
+
+  const settingsPatch = patch[STORAGE_KEYS.SETTINGS] as Record<string, unknown>;
+  if (settingsPatch.lookupKey !== undefined && !settingsPatch.lookupKeys) {
+    const oldKey = settingsPatch.lookupKey as LookupKey;
+    settingsPatch.lookupKeys = {
+      mac: oldKey,
+      win: oldKey,
+    };
+    delete settingsPatch.lookupKey;
+  } else if (settingsPatch.lookupKeys) {
+    const keys = settingsPatch.lookupKeys as Partial<PerPlatformLookupKeys>;
+    settingsPatch.lookupKeys = {
+      mac: keys.mac || "Control",
+      win: keys.win || "Control",
+    };
+  }
 
   if (Object.keys(patch).length > 0) {
     await browser.storage.local.set(patch);
