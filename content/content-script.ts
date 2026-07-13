@@ -26,19 +26,43 @@ function getFireworksAPI(): FireworksAPI {
 
   type State = typeof STATE[keyof typeof STATE];
 
+  type LookupKey = "Control" | "Meta" | "Alt" | "Shift";
+  type Platform = "mac" | "win";
+
+  function detectPlatform(): Platform {
+    if (typeof navigator !== "undefined" && navigator.platform) {
+      return /Mac|iPod|iPhone|iPad/.test(navigator.platform) ? "mac" : "win";
+    }
+    return "win";
+  }
+
+  const currentPlatform: Platform = detectPlatform();
+
+  interface PerPlatformLookupKeys {
+    mac: LookupKey;
+    win: LookupKey;
+  }
+
   interface Settings {
-    lookupKey: "Control" | "Meta" | "Alt" | "Shift";
+    lookupKeys: PerPlatformLookupKeys;
     hoverDelay: number;
     autoSpeak: boolean;
     fireworksEffect: "canvas" | "css" | "none";
   }
 
   const DEFAULT_SETTINGS: Settings = {
-    lookupKey: "Control",
+    lookupKeys: {
+      mac: "Control",
+      win: "Control",
+    },
     hoverDelay: 100,
     autoSpeak: false,
     fireworksEffect: "canvas",
   };
+
+  function getActiveLookupKey(): LookupKey {
+    return settings.lookupKeys?.[currentPlatform] || "Control";
+  }
 
   const WORD_PATTERN = /[A-Za-z][A-Za-z'-]{1,44}/g;
   const EXCLUDED_SELECTOR = "input, textarea, [contenteditable='true'], [contenteditable=''], pre, code";
@@ -114,10 +138,28 @@ function getFireworksAPI(): FireworksAPI {
   async function loadSettings(): Promise<void> {
     try {
       const response = await sendMessage({ type: "GET_SETTINGS" });
+      const raw: Record<string, unknown> = (response.settings as Record<string, unknown>) || {};
+      if (raw.lookupKey !== undefined && !raw.lookupKeys) {
+        const oldKey = raw.lookupKey as LookupKey;
+        raw.lookupKeys = {
+          mac: oldKey,
+          win: oldKey,
+        };
+        delete raw.lookupKey;
+      }
+      if (!raw.lookupKeys || typeof raw.lookupKeys !== "object") {
+        raw.lookupKeys = { mac: "Control", win: "Control" };
+      } else {
+        const keys = raw.lookupKeys as Partial<PerPlatformLookupKeys>;
+        raw.lookupKeys = {
+          mac: keys.mac || "Control",
+          win: keys.win || "Control",
+        };
+      }
       settings = {
         ...DEFAULT_SETTINGS,
-        ...(response.settings || {}),
-      };
+        ...raw,
+      } as Settings;
     } catch (error) {
       _logger.warn("加载设置失败，使用默认设置：", error);
       settings = { ...DEFAULT_SETTINGS };
@@ -203,11 +245,7 @@ function getFireworksAPI(): FireworksAPI {
   }
 
   function isLookupModifierStillHeld(event: KeyboardEvent): boolean {
-    if (settings.lookupKey === "Control") {
-      return event.getModifierState("Control") || event.getModifierState("Meta");
-    }
-
-    return event.getModifierState(settings.lookupKey);
+    return event.getModifierState(getActiveLookupKey());
   }
 
   function isLookupKeyEvent(event: KeyboardEvent): boolean {
@@ -215,11 +253,7 @@ function getFireworksAPI(): FireworksAPI {
       return false;
     }
 
-    if (settings.lookupKey === "Control") {
-      return event.key === "Control" || event.key === "Meta";
-    }
-
-    return event.key === settings.lookupKey;
+    return event.key === getActiveLookupKey();
   }
 
   function enterPenMode(): void {
