@@ -5,7 +5,13 @@ dist/
 coverage/
 .vitest/
 
+# Playwright e2e test artifacts
+test-results/
+playwright-report/
+/playwright/.cache/
+
 # Environment variables
+# Copy .env.example to .env.local and fill in your values
 .env
 .env.local
 
