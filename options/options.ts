@@ -1,8 +1,8 @@
 import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { SETTINGS_LIMITS } from "../lib/constants.js";
+import { SETTINGS_LIMITS, detectPlatform } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
-import type { Settings } from "../lib/storage.js";
+import type { Settings, LookupKey, Platform } from "../lib/storage.js";
 
 const logger = createLogger("options");
 
@@ -31,7 +31,7 @@ interface SettingsFormElements extends HTMLFormElement {
   authPassword: HTMLInputElement;
 }
 
-const isMac = /Mac|iPod|iPhone|iPad/.test(navigator.platform);
+const currentPlatform: Platform = detectPlatform();
 
 const LOOKUP_KEY_OPTIONS = {
   mac: [
@@ -48,7 +48,7 @@ const LOOKUP_KEY_OPTIONS = {
 } as const;
 
 function getPlatformLookupKeyOptions() {
-  return isMac ? LOOKUP_KEY_OPTIONS.mac : LOOKUP_KEY_OPTIONS.win;
+  return currentPlatform === "mac" ? LOOKUP_KEY_OPTIONS.mac : LOOKUP_KEY_OPTIONS.win;
 }
 
 function initLookupKeySelect(): void {
@@ -71,20 +71,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshAuthStatus();
   await refreshSyncStatus();
 
-  // 监听后台登录态变化（如 token 失效被清空），实时刷新页面显示
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes.authData) {
       void refreshAuthStatus();
       void refreshSyncStatus();
     }
+    if (areaName === "local" && changes.settings) {
+      void loadSettings();
+    }
   });
 });
 
-function getPlatformDefaultLookupKey(): string {
+function getPlatformDefaultLookupKey(): LookupKey {
   return "Control";
 }
 
-function isValidLookupKeyForPlatform(value: string): boolean {
+function isValidLookupKeyForPlatform(value: string): value is LookupKey {
   return getPlatformLookupKeyOptions().some(opt => opt.value === value);
 }
 
@@ -92,7 +94,8 @@ async function loadSettings(): Promise<void> {
   try {
     const response = await sendMessage({ type: "GET_SETTINGS" });
     const settings: Partial<Settings> = response.settings || {};
-    const savedKey = settings.lookupKey || getPlatformDefaultLookupKey();
+    const lookupKeys = settings.lookupKeys || { mac: "Control", win: "Control" };
+    const savedKey = lookupKeys[currentPlatform] || getPlatformDefaultLookupKey();
     (form as SettingsFormElements).lookupKey.value = isValidLookupKeyForPlatform(savedKey)
       ? savedKey
       : getPlatformDefaultLookupKey();
@@ -100,7 +103,7 @@ async function loadSettings(): Promise<void> {
     (form as SettingsFormElements).translator.value = settings.translator || "free";
     (form as SettingsFormElements).useYoudaoDict.checked = settings.useYoudaoDict !== false;
     (form as SettingsFormElements).autoSpeak.checked = Boolean(settings.autoSpeak);
-    (form as SettingsFormElements).fireworksEffect.value = settings.fireworksEffect || "css";
+    (form as SettingsFormElements).fireworksEffect.value = settings.fireworksEffect || "canvas";
     (form as SettingsFormElements).maxCacheSize.value = String(settings.maxCacheSize || 200);
     (form as SettingsFormElements).rememberDevice7Days.checked = Boolean(settings.rememberDevice7Days);
   } catch (error) {
@@ -128,7 +131,6 @@ async function refreshAuthStatus(): Promise<void> {
   }
 }
 
-// 回填已记住的登录凭证：7天内回填邮箱+密码，超过7天只回填邮箱
 async function fillRememberedCredentials(): Promise<void> {
   try {
     const response = await sendMessage({ type: "AUTH_GET_CREDENTIALS" }) as unknown as { ok: boolean; email: string; password: string };
@@ -213,14 +215,12 @@ async function handleAuthLogout(): Promise<void> {
 async function handleRememberDeviceChange(): Promise<void> {
   const remember = rememberDeviceCheckbox!.checked;
   try {
-    // 即时保存勾选状态（合并到现有设置，避免覆盖其他字段）
     const response = await sendMessage({ type: "GET_SETTINGS" });
     const current = response.settings || {};
     await sendMessage({
       type: "SAVE_SETTINGS",
       settings: { ...current, rememberDevice7Days: remember },
     });
-    // 同步更新已登录态的过期时间
     await sendMessage({ type: "AUTH_SET_REMEMBER", remember });
     setStatus(remember ? "已开启在此设备记住7天" : "已关闭在此设备记住7天");
   } catch (error) {
@@ -233,22 +233,27 @@ const SETTING_LABELS: Record<string, string> = {
   fireworksEffect: "添加单词特效",
 };
 
-async function autoSaveSetting(key: keyof Settings): Promise<void> {
+async function autoSaveSetting(key: "lookupKey" | "fireworksEffect"): Promise<void> {
   try {
     const response = await sendMessage({ type: "GET_SETTINGS" });
-    const current = response.settings || {};
+    const current: Partial<Settings> = response.settings || {};
     const formEl = form as SettingsFormElements;
-    let value: string | boolean | number;
+    let patch: Partial<Settings>;
     if (key === "lookupKey") {
-      value = formEl.lookupKey.value;
-    } else if (key === "fireworksEffect") {
-      value = formEl.fireworksEffect.value;
+      const newValue = formEl.lookupKey.value as LookupKey;
+      const existingKeys = current.lookupKeys || { mac: "Control" as LookupKey, win: "Control" as LookupKey };
+      patch = {
+        lookupKeys: {
+          ...existingKeys,
+          [currentPlatform]: newValue,
+        },
+      };
     } else {
-      return;
+      patch = { fireworksEffect: formEl.fireworksEffect.value as Settings["fireworksEffect"] };
     }
     await sendMessage({
       type: "SAVE_SETTINGS",
-      settings: { ...current, [key]: value },
+      settings: { ...current, ...patch },
     });
     const label = SETTING_LABELS[key] || key;
     setStatus(`${label}已保存`);
@@ -260,8 +265,16 @@ async function autoSaveSetting(key: keyof Settings): Promise<void> {
 async function handleSubmit(event: Event): Promise<void> {
   event.preventDefault();
 
+  const response = await sendMessage({ type: "GET_SETTINGS" });
+  const current: Partial<Settings> = response.settings || {};
+  const existingKeys = current.lookupKeys || { mac: "Control" as LookupKey, win: "Control" as LookupKey };
+  const newLookupKeyValue = (form as SettingsFormElements).lookupKey.value as LookupKey;
+
   const payload = {
-    lookupKey: (form as SettingsFormElements).lookupKey.value,
+    lookupKeys: {
+      ...existingKeys,
+      [currentPlatform]: newLookupKeyValue,
+    },
     hoverDelay: clampNumber((form as SettingsFormElements).hoverDelay.value, SETTINGS_LIMITS.HOVER_DELAY_MIN, SETTINGS_LIMITS.HOVER_DELAY_MAX, SETTINGS_LIMITS.HOVER_DELAY_DEFAULT),
     translator: (form as SettingsFormElements).translator.value,
     useYoudaoDict: (form as SettingsFormElements).useYoudaoDict.checked,
