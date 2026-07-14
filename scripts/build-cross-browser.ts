@@ -87,6 +87,23 @@ function buildForBrowser(target: "chrome" | "safari"): void {
   }
 
   const merged = deepMerge(baseManifest, browserManifest);
+
+  // Inject version from RELEASE_VERSION env (set by CI)
+  // Chrome/Safari manifest requires version like x.y.z or x.y.z.w (no 'v' prefix, no +metadata)
+  let releaseVersion = process.env.RELEASE_VERSION?.trim().replace(/^v/, "");
+  if (releaseVersion) {
+    // Strip semver build metadata (e.g. 0.0.0-dev+abc1234 -> 0.0.0.0)
+    releaseVersion = releaseVersion.replace(/\+.*$/, "");
+    // Convert pre-release tags (e.g. 0.0.0-dev) to 4-part dotted version
+    releaseVersion = releaseVersion.replace(/-.*$/, "");
+    if (/^\d+\.\d+\.\d+(\.\d+)?$/.test(releaseVersion)) {
+      (merged as Record<string, unknown>).version = releaseVersion;
+      console.log(`[build-cross-browser] Injected release version: ${releaseVersion}`);
+    } else {
+      console.warn(`[build-cross-browser] Invalid RELEASE_VERSION "${releaseVersion}", keeping manifest default`);
+    }
+  }
+
   fs.writeFileSync(path.join(distDir, "manifest.json"), JSON.stringify(merged, null, 2));
 
   console.log(`[build-cross-browser] ${target} built → dist/${target}/`);
