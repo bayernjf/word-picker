@@ -220,7 +220,7 @@ interface Word {
 | 分支 | 用途 |
 |------|------|
 | `main` | 生产，合并触发正式 Release（自动递增 patch 版本） |
-| `dev` | 开发集成，push 触发 Dev Snapshot（tag=snapshot，prerelease） |
+| `dev` | 开发集成，push 触发 Dev Snapshot（tag=snapshot，prerelease，固定版本 0.0.0.0 覆盖安装） |
 | `feature/<描述>` / `fix/<描述>` | 功能/修复分支 |
 
 ### 提交指令（开发者说以下话时执行）
@@ -271,7 +271,7 @@ interface Word {
 - `.github/workflows/release.yml`：
   - push `v*` tag → 正式 Release（使用指定版本号）
   - push `main` → 正式 Release（自动 patch+1，如 v1.2.3 → v1.2.4）
-  - push `dev` → Dev Snapshot（tag=`snapshot`，prerelease，每次覆盖）
+  - push `dev` → Dev Snapshot（tag=`snapshot`，版本固定 `0.0.0.0` 每次覆盖，prerelease）
   - 流程：checkout → npm ci → lint → test → resolve-tag → build:dict → build（注入 RELEASE_VERSION）→ pack → upload artifacts → create GitHub Release
   - Secrets 需要配置：`SUPABASE_URL`、`SUPABASE_ANON_KEY`
 - **Chrome Web Store 自动上架**暂未实现（记录在 TRACKING.md P1），目前 zip 产物附在 GitHub Release 上，手动上传到 Chrome Developer Dashboard
