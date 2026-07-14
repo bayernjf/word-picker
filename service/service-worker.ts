@@ -47,14 +47,19 @@ const STORAGE_SYNC_LOCK = 'syncLock';
 
 let isSyncing = false;
 
-// 同步锁持久化：Service Worker 被系统回收后恢复状态
+const SYNC_LOCK_TIMEOUT_MS = 120_000;
+
 async function syncLockAcquire(): Promise<boolean> {
   const data = await browser.storage.local.get([STORAGE_SYNC_LOCK]);
-  const locked = Boolean(data?.[STORAGE_SYNC_LOCK]);
-  if (locked) {
-    return false;
+  const raw = data?.[STORAGE_SYNC_LOCK];
+  if (raw) {
+    const lockTime = typeof raw === 'number' ? raw : 0;
+    if (Date.now() - lockTime < SYNC_LOCK_TIMEOUT_MS) {
+      return false;
+    }
+    logger.warn('sync lock stale, force releasing', { lockTime });
   }
-  await browser.storage.local.set({ [STORAGE_SYNC_LOCK]: true });
+  await browser.storage.local.set({ [STORAGE_SYNC_LOCK]: Date.now() });
   isSyncing = true;
   return true;
 }
