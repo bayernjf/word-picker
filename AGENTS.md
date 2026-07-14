@@ -215,13 +215,25 @@ interface Word {
 
 ## Git 工作流
 
-### 分支
+### 分支与发版规则
 
-| 分支 | 用途 |
-|------|------|
-| `main` | 生产，合并触发正式 Release（自动递增 patch 版本） |
-| `dev` | 开发集成，push 触发 Dev Snapshot（tag=snapshot，prerelease，固定版本 0.0.0.0 覆盖安装） |
-| `feature/<描述>` / `fix/<描述>` | 功能/修复分支 |
+| 维度 | `dev` 分支 | `main` 分支 |
+|------|-----------|------------|
+| **用途** | 开发集成，日常合入 | 生产发布 |
+| **触发方式** | push 到 dev | push/合并到 main，或手动 push `v*` tag |
+| **发布类型** | Dev Snapshot（预发布） | 正式 Release |
+| **版本号** | 固定 `0.0.0.0`（Chrome manifest x.y.z.w 格式，覆盖安装） | 自动递增 patch（v1.0.0 → v1.0.1）或 tag 指定 |
+| **GitHub Tag** | 固定 `snapshot`（每次覆盖同一个 release） | `v1.0.0`、`v1.0.1`… 每个版本独立 tag |
+| **Release 名称** | 固定 `Dev Snapshot` | 版本号（如 `v1.0.1`） |
+| **prerelease 标记** | `true` | `false` |
+| **manifest version** | `0.0.0.0` | `x.y.z`（与 tag 一致，注入构建） |
+| **Release notes** | 追加到上一个 snapshot body | 自动生成 |
+| **Chrome 商店** | ❌ 不上架 | ❌ 暂未自动上架（手动上传 zip） |
+| **合并方式** | AI 可自动合并（「提交代码并合并到 dev」） | 必须手动从 dev 提 PR，review 后合并 |
+
+手动指定版本发布：`git tag v1.2.3 && git push origin v1.2.3` 触发对应版本正式 Release。
+
+功能/修复开发请使用 `feature/<描述>` / `fix/<描述>` 分支，不要直接在 main/dev 上提交。
 
 ### 提交指令（开发者说以下话时执行）
 
@@ -250,13 +262,7 @@ interface Word {
 
 ### 合并到 main
 
-**不自动**。必须手动从 `dev` 提 PR 到 `main`，review 后合并。合并后 CI 自动：
-- 基于最新 v* tag 递增 patch 版本
-- 注入版本号到 manifest
-- 打 zip 包
-- 创建 GitHub Release 并上传产物
-
-手动指定版本发布：`git tag v1.2.3 && git push origin v1.2.3` 触发对应版本的 Release。
+**不自动**。必须手动从 `dev` 提 PR 到 `main`，review 后合并。合并后 CI 自动 bump patch 版本、注入 manifest、打包、创建 GitHub Release（详见上方"分支与发版规则"表）。
 
 ### 冲突规则
 
