@@ -3,8 +3,9 @@ import {
   selectPreferredSyncBook,
   normalizeContextValue,
   normalizeSourceLinkValue,
+  normalizeSyncBaseUrl,
 } from "./utils.js";
-import { DEFAULT_SYNC_BASE_URL } from "./constants.js";
+import { DEFAULT_SYNC_BASE_URL, KNOWN_SYNC_BASE_URL_DEFAULTS } from "./constants.js";
 import type { LookupKey } from "./constants.js";
 import type { Book } from "./utils.js";
 
@@ -82,6 +83,7 @@ const STORAGE_KEYS = {
   BOOKS: "books",
   CACHE: "cache",
   SETTINGS: "settings",
+  SYNC_BASE_URL_BUILD_DEFAULT: "syncBaseUrlBuildDefault",
   SYNC_VERSION: "syncVersion",
 };
 
@@ -166,12 +168,39 @@ export interface StorageData {
   settings: Settings;
 }
 
+export function migrateSyncBaseUrlDefault(
+  value: unknown,
+  buildDefaultMarker: unknown
+): { syncBaseUrl: string; buildDefaultMarker: string | null } {
+  const currentDefault = normalizeSyncBaseUrl(DEFAULT_SYNC_BASE_URL);
+  const knownDefaults = new Set(KNOWN_SYNC_BASE_URL_DEFAULTS.map((url) => normalizeSyncBaseUrl(url)));
+  const rawValue = typeof value === 'string' ? value.trim().replace(/\/+$/, '') : '';
+  const withoutLegacyApp = rawValue.endsWith('/app') ? rawValue.slice(0, -4) : rawValue;
+  const normalizedValue = normalizeSyncBaseUrl(withoutLegacyApp);
+  const rawMarker = typeof buildDefaultMarker === 'string'
+    ? buildDefaultMarker.trim().replace(/\/+$/, '')
+    : '';
+  const normalizedMarker = knownDefaults.has(rawMarker) ? rawMarker : '';
+
+  const shouldUseCurrentDefault = (
+    (!normalizedMarker && knownDefaults.has(normalizedValue)) ||
+    (normalizedMarker === normalizedValue && normalizedMarker !== currentDefault)
+  );
+  const syncBaseUrl = shouldUseCurrentDefault ? currentDefault : normalizedValue;
+
+  return {
+    syncBaseUrl,
+    buildDefaultMarker: syncBaseUrl === currentDefault ? currentDefault : null,
+  };
+}
+
 export async function ensureDefaults(): Promise<StorageData> {
   const current: Record<string, unknown> = await browser.storage.local.get([
     STORAGE_KEYS.WORDS,
     STORAGE_KEYS.CACHE,
     STORAGE_KEYS.SETTINGS,
     STORAGE_KEYS.BOOKS,
+    STORAGE_KEYS.SYNC_BASE_URL_BUILD_DEFAULT,
   ]);
 
   const patch: Record<string, unknown> = {};
@@ -226,15 +255,20 @@ export async function ensureDefaults(): Promise<StorageData> {
     };
   }
 
-  if (typeof settingsPatch.syncBaseUrl === 'string') {
-    const url = settingsPatch.syncBaseUrl.replace(/\/+$/, '');
-    if (url.endsWith('/app')) {
-      settingsPatch.syncBaseUrl = url.slice(0, -4) || DEFAULT_SYNC_BASE_URL;
-    }
+  const syncUrlMigration = migrateSyncBaseUrlDefault(
+    settingsPatch.syncBaseUrl,
+    current[STORAGE_KEYS.SYNC_BASE_URL_BUILD_DEFAULT]
+  );
+  settingsPatch.syncBaseUrl = syncUrlMigration.syncBaseUrl;
+  if (syncUrlMigration.buildDefaultMarker) {
+    patch[STORAGE_KEYS.SYNC_BASE_URL_BUILD_DEFAULT] = syncUrlMigration.buildDefaultMarker;
   }
 
   if (Object.keys(patch).length > 0) {
     await browser.storage.local.set(patch);
+  }
+  if (!syncUrlMigration.buildDefaultMarker && current[STORAGE_KEYS.SYNC_BASE_URL_BUILD_DEFAULT] !== undefined) {
+    await browser.storage.local.remove(STORAGE_KEYS.SYNC_BASE_URL_BUILD_DEFAULT);
   }
 
   return {
@@ -255,7 +289,16 @@ export async function saveSettings(settingsPatch: Partial<Settings>): Promise<Se
     ...(await getSettings()),
     ...settingsPatch,
   };
-  await browser.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings });
+  settings.syncBaseUrl = normalizeSyncBaseUrl(settings.syncBaseUrl);
+  const currentDefault = normalizeSyncBaseUrl(DEFAULT_SYNC_BASE_URL);
+  const patch: Record<string, unknown> = { [STORAGE_KEYS.SETTINGS]: settings };
+  if (settings.syncBaseUrl === currentDefault) {
+    patch[STORAGE_KEYS.SYNC_BASE_URL_BUILD_DEFAULT] = currentDefault;
+    await browser.storage.local.set(patch);
+  } else {
+    await browser.storage.local.set(patch);
+    await browser.storage.local.remove(STORAGE_KEYS.SYNC_BASE_URL_BUILD_DEFAULT);
+  }
   return settings;
 }
 

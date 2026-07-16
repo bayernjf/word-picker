@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill";
-import { DEFAULT_BOOK_NAME } from "./constants.js";
+import { DEFAULT_BOOK_NAME, DEFAULT_SYNC_BASE_URL } from "./constants.js";
 
 export function escapeHtml(value: unknown): string {
   return String(value || "")
@@ -149,4 +149,68 @@ export function selectPreferredSyncBook(books: Book[]): Book | null {
       const rightUpdated = Number(right.updatedAt) || Number(right.createdAt) || 0;
       return rightUpdated - leftUpdated;
     })[0] || null;
+}
+
+export function normalizeSyncBaseUrl(value: unknown, fallback: string = DEFAULT_SYNC_BASE_URL): string {
+  const normalizedFallback = normalizeAllowedSyncUrl(fallback) || DEFAULT_SYNC_BASE_URL.replace(/\/+$/, '');
+  return normalizeAllowedSyncUrl(value) || normalizedFallback;
+}
+
+function normalizeAllowedSyncUrl(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  try {
+    const url = new URL(value.trim());
+    const isLocalHttp = url.protocol === 'http:' && (
+      url.hostname === 'localhost' ||
+      url.hostname === '127.0.0.1' ||
+      url.hostname === '[::1]'
+    );
+    if (url.protocol !== 'https:' && !isLocalHttp) {
+      return null;
+    }
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchSyncJson(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs: number = 15_000
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (response.status === 401) {
+      throw new Error('unauthorized');
+    }
+
+    const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+    if (!response.ok) {
+      throw new Error(`sync_http_${response.status}`);
+    }
+    if (!contentType.includes('json')) {
+      throw new Error(`sync_invalid_response_${response.status}_${contentType || 'unknown'}`);
+    }
+
+    const body = await response.text();
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      throw new Error(`sync_invalid_json_${response.status}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('sync_request_timeout');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

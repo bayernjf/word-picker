@@ -3,10 +3,16 @@
 // 不要用函数包裹，避免运行时在 Service Worker 中访问 import.meta 导致异常。
 
 // 同步 API 地址（后端 API 在根路径 /api/v1/*）
-export const DEFAULT_SYNC_BASE_URL = "https://word-base.pages.dev";
+export const DEFAULT_SYNC_BASE_URL = "http://localhost:3001";
+
+export const KNOWN_SYNC_BASE_URL_DEFAULTS = [
+  "http://localhost:3001",
+  "https://dev.word-base.pages.dev",
+  "https://word-base.pages.dev",
+] as const;
 
 // word-base 前端地址（logo 跳转/登录页面）
-export const WORD_BASE_APP_URL = "https://word-base.pages.dev/app";
+export const WORD_BASE_APP_URL = "http://localhost:3000/app";
 
 export const SETTINGS_LIMITS = {
   HOVER_DELAY_MIN: 100,
