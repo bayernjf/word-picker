@@ -14,6 +14,12 @@ function readEnv(key: string): string | undefined {
 export const SUPABASE_URL = readEnv('SUPABASE_URL') ?? '';
 export const SUPABASE_ANON_KEY = readEnv('SUPABASE_ANON_KEY') ?? '';
 
+function ensureSupabaseConfigured(): void {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    throw new Error('supabase_not_configured');
+  }
+}
+
 interface SupabaseSession {
   access_token: string;
   refresh_token: string;
@@ -55,6 +61,7 @@ function authHeadersWithToken(accessToken: string): Record<string, string> {
 
 export async function signInWithPassword(email: string, password: string): Promise<{ session?: SupabaseSession; user?: SupabaseSession['user']; error?: SupabaseAuthError }> {
   try {
+    ensureSupabaseConfigured();
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
       method: 'POST',
       headers: authHeaders(),
@@ -78,6 +85,7 @@ export async function signInWithPassword(email: string, password: string): Promi
 
 export async function signUp(email: string, password: string): Promise<{ session?: SupabaseSession; user?: SupabaseSession['user']; error?: SupabaseAuthError; needsEmailConfirmation?: boolean }> {
   try {
+    ensureSupabaseConfigured();
     const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
       method: 'POST',
       headers: authHeaders(),
@@ -107,6 +115,7 @@ export async function signUp(email: string, password: string): Promise<{ session
 
 export async function refreshSession(refreshToken: string): Promise<{ session?: SupabaseSession; error?: SupabaseAuthError }> {
   try {
+    ensureSupabaseConfigured();
     const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
       method: 'POST',
       headers: authHeaders(),
@@ -130,6 +139,7 @@ export async function refreshSession(refreshToken: string): Promise<{ session?: 
 
 export async function signOut(accessToken: string): Promise<{ error?: SupabaseAuthError }> {
   try {
+    ensureSupabaseConfigured();
     await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
       method: 'POST',
       headers: authHeadersWithToken(accessToken),
@@ -143,6 +153,7 @@ export async function signOut(accessToken: string): Promise<{ error?: SupabaseAu
 
 export async function getUser(accessToken: string): Promise<{ user?: SupabaseSession['user']; error?: SupabaseAuthError }> {
   try {
+    ensureSupabaseConfigured();
     const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
       method: 'GET',
       headers: authHeadersWithToken(accessToken),
