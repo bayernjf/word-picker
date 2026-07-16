@@ -5,12 +5,24 @@
  * 用法：node dist/scripts/pack.js [chrome|safari|all]
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
 const ROOT = process.cwd();
 const DIST_DIR = path.join(ROOT, "dist");
+
+function checkZipAvailable(): void {
+  try {
+    execSync("zip -v", { stdio: "ignore" });
+  } catch {
+    console.error("[pack] 错误：未检测到 zip 命令。请安装 zip 后重试：");
+    console.error("  macOS:   brew install zip");
+    console.error("  Ubuntu:  sudo apt install zip");
+    console.error("  Windows: 安装 Git Bash 或使用 WSL");
+    process.exit(1);
+  }
+}
 
 function packTarget(target: string): void {
   const targetDir = path.join(DIST_DIR, target);
@@ -39,6 +51,7 @@ function packTarget(target: string): void {
 }
 
 function main(): void {
+  checkZipAvailable();
   const target = process.argv[2] || "all";
 
   if (target === "all") {
