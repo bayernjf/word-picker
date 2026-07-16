@@ -46,13 +46,23 @@ class Logger {
   }
 
   private formatArgs(args: unknown[]): unknown[] {
+    const safeStringify = (obj: unknown): string => {
+      const seen = new WeakSet<object>();
+      return JSON.stringify(obj, (_key, value) => {
+        if (typeof value === 'object' && value !== null) {
+          if (seen.has(value)) return '[Circular]';
+          seen.add(value);
+        }
+        return value;
+      });
+    };
     return args.map((arg) => {
       if (arg instanceof Error) {
         return arg.stack || arg.message;
       }
       if (typeof arg === 'object' && arg !== null) {
         try {
-          return JSON.stringify(arg);
+          return safeStringify(arg);
         } catch {
           return String(arg);
         }
@@ -96,16 +106,22 @@ function createLogger(namespace: string): Logger {
       .replace(/'/g, "&#39;");
   }
 
-  function sendMessage(message: object): Promise<SendMessageResponse> {
-    return browser.runtime.sendMessage(message).then((response: SendMessageResponse) => {
-      if (!response?.success) {
-        throw new Error(response?.error || "扩展消息请求失败");
-      }
-      return response;
-    });
+  function sendMessage(message: object, timeoutMs: number = 10000): Promise<SendMessageResponse> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      browser.runtime.sendMessage(message).then((response: SendMessageResponse) => {
+        if (!response?.success) {
+          throw new Error(response?.error || "扩展消息请求失败");
+        }
+        return response;
+      }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`消息发送超时（${timeoutMs}ms）`)), timeoutMs);
+      }),
+    ]).finally(() => { if (timer !== undefined) clearTimeout(timer); });
   }
 
-  (window as unknown as { __WordPickerShared: { escapeHtml: (value: unknown) => string; sendMessage: (message: object) => Promise<SendMessageResponse>; createLogger: (namespace: string) => Logger } }).__WordPickerShared = {
+  (window as unknown as { __WordPickerShared: { escapeHtml: (value: unknown) => string; sendMessage: (message: object, timeoutMs?: number) => Promise<SendMessageResponse>; createLogger: (namespace: string) => Logger } }).__WordPickerShared = {
     escapeHtml,
     sendMessage,
     createLogger,

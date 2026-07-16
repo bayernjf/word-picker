@@ -13,7 +13,12 @@ function getFireworksAPI(): FireworksAPI {
   return (window as unknown as { __WordPickerFireworks: FireworksAPI }).__WordPickerFireworks;
 }
 
-(() => {
+(function () {
+  if ((window as unknown as { __WordPickerContentLoaded?: boolean }).__WordPickerContentLoaded) {
+    return;
+  }
+  (window as unknown as { __WordPickerContentLoaded?: boolean }).__WordPickerContentLoaded = true;
+
   const { escapeHtml, sendMessage, createLogger } = (window as unknown as { __WordPickerShared: SharedAPI }).__WordPickerShared;
   const _logger = createLogger("content-script");
 
@@ -94,6 +99,14 @@ function getFireworksAPI(): FireworksAPI {
   let wordHighlight: Highlight | null = null;
 
   const KEYDOWN_POPUP_DELAY_MS = 100;
+  const VIEWPORT_CHANGE_THROTTLE_MS = 100;
+
+  let rafPending = false;
+  let pendingHighlightX = 0;
+  let pendingHighlightY = 0;
+
+  let viewportChangeTimer: number | null = null;
+  let pendingViewportChange = false;
 
   interface DetectionResult {
     word: string;
@@ -166,6 +179,8 @@ function getFireworksAPI(): FireworksAPI {
     }
   }
 
+  let visibilityChangeHandler: (() => void) | null = null;
+
   function bindEvents(): void {
     document.addEventListener("keydown", handleKeyDown, true);
     document.addEventListener("keyup", handleKeyUp, true);
@@ -176,12 +191,35 @@ function getFireworksAPI(): FireworksAPI {
     window.addEventListener("blur", exitPenMode, true);
     window.addEventListener("resize", handleViewportChange, true);
     browser.storage.onChanged.addListener(handleStorageChange);
-    document.addEventListener("visibilitychange", () => {
+    visibilityChangeHandler = () => {
       if (document.hidden) {
         exitPenMode();
         getFireworksAPI().clearFireworks();
       }
-    });
+    };
+    document.addEventListener("visibilitychange", visibilityChangeHandler);
+    window.addEventListener("pagehide", unbindEvents);
+  }
+
+  function unbindEvents(): void {
+    document.removeEventListener("keydown", handleKeyDown, true);
+    document.removeEventListener("keyup", handleKeyUp, true);
+    document.removeEventListener("mousemove", handleMouseMove, true);
+    document.removeEventListener("scroll", handleViewportChange, true);
+    document.removeEventListener("wheel", handleWheelWhilePinned, { capture: true, passive: true } as AddEventListenerOptions);
+    document.removeEventListener("focusin", handleFocusInWhilePinned, true);
+    window.removeEventListener("blur", exitPenMode, true);
+    window.removeEventListener("resize", handleViewportChange, true);
+    browser.storage.onChanged.removeListener(handleStorageChange);
+    if (visibilityChangeHandler) {
+      document.removeEventListener("visibilitychange", visibilityChangeHandler);
+      visibilityChangeHandler = null;
+    }
+    if (viewportChangeTimer !== null) {
+      self.clearTimeout(viewportChangeTimer);
+      viewportChangeTimer = null;
+    }
+    window.removeEventListener("pagehide", unbindEvents);
   }
 
   function handleStorageChange(changes: Record<string, { oldValue?: unknown; newValue?: unknown }>, areaName: string): void {
@@ -189,17 +227,35 @@ function getFireworksAPI(): FireworksAPI {
       return;
     }
 
+    const raw = changes.settings.newValue as Record<string, unknown>;
+    if (raw.lookupKey !== undefined && !raw.lookupKeys) {
+      const oldKey = raw.lookupKey as LookupKey;
+      raw.lookupKeys = {
+        mac: oldKey,
+        win: oldKey,
+      };
+      delete raw.lookupKey;
+    }
+    if (!raw.lookupKeys || typeof raw.lookupKeys !== "object") {
+      raw.lookupKeys = { mac: "Control", win: "Control" };
+    } else {
+      const keys = raw.lookupKeys as Partial<PerPlatformLookupKeys>;
+      raw.lookupKeys = {
+        mac: keys.mac || "Control",
+        win: keys.win || "Control",
+      };
+    }
+
     settings = {
       ...DEFAULT_SETTINGS,
-      ...changes.settings.newValue,
-    };
+      ...raw,
+    } as Settings;
     exitPenMode();
   }
 
   function handleKeyDown(event: KeyboardEvent): void {
     if (event.key === "Escape" && popupContainer) {
       event.preventDefault();
-      event.stopPropagation();
       closePopupAndReset();
       return;
     }
@@ -253,7 +309,19 @@ function getFireworksAPI(): FireworksAPI {
       return false;
     }
 
-    return event.key === getActiveLookupKey();
+    if (event.key !== getActiveLookupKey()) {
+      return false;
+    }
+
+    const activeKey = getActiveLookupKey();
+    const otherModifiers: Array<"Control" | "Meta" | "Alt" | "Shift"> = ["Control", "Meta", "Alt", "Shift"].filter(k => k !== activeKey) as Array<"Control" | "Meta" | "Alt" | "Shift">;
+    for (const mod of otherModifiers) {
+      if (event.getModifierState(mod)) {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   function enterPenMode(): void {
@@ -351,7 +419,20 @@ function getFireworksAPI(): FireworksAPI {
       return;
     }
 
+    if (viewportChangeTimer !== null) {
+      pendingViewportChange = true;
+      return;
+    }
     positionPopup(popupContainer, activeAnchor.x, activeAnchor.y);
+    viewportChangeTimer = self.setTimeout(() => {
+      viewportChangeTimer = null;
+      if (pendingViewportChange) {
+        pendingViewportChange = false;
+        if (popupContainer && !isPopupPinned()) {
+          positionPopup(popupContainer, activeAnchor.x, activeAnchor.y);
+        }
+      }
+    }, VIEWPORT_CHANGE_THROTTLE_MS);
   }
 
   function handleWheelWhilePinned(): void {
@@ -400,14 +481,22 @@ function getFireworksAPI(): FireworksAPI {
     }, delay);
   }
 
-  // 根据鼠标位置检测单词并即时高亮；未命中单词时清除高亮
   function updateHoverHighlight(x: number, y: number): void {
-    const detection = detectWordAtPoint(x, y);
-    if (detection?.node) {
-      highlightWord(detection.node, detection.start, detection.end);
-    } else {
-      clearWordHighlight();
+    pendingHighlightX = x;
+    pendingHighlightY = y;
+    if (rafPending) {
+      return;
     }
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      const detection = detectWordAtPoint(pendingHighlightX, pendingHighlightY);
+      if (detection?.node) {
+        highlightWord(detection.node, detection.start, detection.end);
+      } else {
+        clearWordHighlight();
+      }
+    });
   }
 
   async function lookupAtPoint(x: number, y: number): Promise<void> {
