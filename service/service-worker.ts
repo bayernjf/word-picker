@@ -22,13 +22,12 @@ import {
   selectPreferredSyncBook,
   normalizeContextValue,
   normalizeSourceLinkValue,
-  normalizeSyncBaseUrl,
   fetchSyncJson,
   Book,
 } from '../lib/utils.js';
-import { QUEUE_MAX_LENGTH } from '../lib/constants.js';
-import { MESSAGE_TYPES } from '../lib/messaging.js';
-import { createLogger } from '../lib/logger.js';
+import { QUEUE_MAX_LENGTH, DEFAULT_SYNC_BASE_URL } from '../lib/constants.js';
+import { MESSAGE_TYPES, isKnownMessageType } from '../lib/messaging.js';
+import { createLogger, setLogLevel } from '../lib/logger.js';
 import {
   setSupabaseSession,
   getSupabaseSession,
@@ -41,6 +40,14 @@ import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
 
 const logger = createLogger('service-worker');
+
+self.addEventListener('unhandledrejection', (event) => {
+  logger.error('unhandled_rejection', { reason: event.reason instanceof Error ? event.reason.message : String(event.reason) });
+});
+
+self.addEventListener('error', (event) => {
+  logger.error('global_error', { message: event.message, filename: event.filename, lineno: event.lineno, colno: event.colno });
+});
 
 const STORAGE_DEVICE_ID = 'deviceId';
 const STORAGE_SYNC_QUEUE = 'syncQueue';
@@ -104,33 +111,82 @@ async function syncLockAcquire(): Promise<boolean> {
 
 async function syncLockRelease(): Promise<void> {
   isSyncing = false;
-  await browser.storage.local.remove([STORAGE_SYNC_LOCK]);
+  try {
+    await browser.storage.local.remove([STORAGE_SYNC_LOCK]);
+  } catch (error) {
+    logger.error('syncLockRelease failed', { error: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+async function initializeOnAwake(): Promise<void> {
+  try {
+    await ensureDefaults();
+    const auth = await getAuthData();
+    if (auth?.accessToken && auth?.refreshToken && !isAuthExpired(auth)) {
+      setSupabaseSession({
+        access_token: auth.accessToken,
+        refresh_token: auth.refreshToken,
+        user: auth.user?.id ? { id: auth.user.id, email: auth.user.email } : undefined,
+        expires_at: typeof auth.expiresAt === 'number' ? auth.expiresAt : undefined,
+      });
+    }
+    const settings = await getSettings();
+    const syncQueue = await getSyncQueue();
+    const deleteQueue = await getDeleteQueue();
+    if ((syncQueue.length > 0 || deleteQueue.length > 0) && settings.syncEnabled !== false) {
+      flushSyncQueue(settings).catch((err) => {
+        logger.warn('[initializeOnAwake] 补偿同步失败，将由 alarm 重试', { error: err instanceof Error ? err.message : String(err) });
+      });
+    }
+  } catch (err) {
+    logger.error('[initializeOnAwake] failed', { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 browser.runtime.onInstalled.addListener(() => {
-  void ensureDefaults();
-  void setupAlarms();
-  void ensureDictImported();
+  ensureDefaults().catch((err) => logger.error('[onInstalled] ensureDefaults failed', { error: String(err) }));
+  setupAlarms().catch((err) => logger.error('[onInstalled] setupAlarms failed', { error: String(err) }));
+  ensureDictImported().catch((err) => logger.error('[onInstalled] ensureDictImported failed', { error: String(err) }));
+  initializeOnAwake();
 });
 
-browser.runtime.onStartup?.addListener(() => {
-  void ensureDefaults();
-  void setupAlarms();
-  void ensureDictImported();
+browser.runtime.onStartup.addListener(() => {
+  ensureDefaults().catch((err) => logger.error('[onStartup] ensureDefaults failed', { error: String(err) }));
+  setupAlarms().catch((err) => logger.error('[onStartup] setupAlarms failed', { error: String(err) }));
+  ensureDictImported().catch((err) => logger.error('[onStartup] ensureDictImported failed', { error: String(err) }));
+  initializeOnAwake();
 });
 
-browser.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === 'sync-words') {
-    const settings = await getSettings();
-    await flushSyncQueue(settings);
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes.settings) return;
+  const newSettings = changes.settings.newValue as Partial<Settings> | undefined;
+  if (newSettings?.logLevel) {
+    setLogLevel(newSettings.logLevel);
   }
 });
 
-browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  handleMessage(message as Message)
-    .then((payload) => sendResponse({ success: true, ...(payload as object) }))
+browser.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== 'sync-words') return;
+  try {
+    const settings = await getSettings();
+    await flushSyncQueue(settings);
+  } catch (err) {
+    logger.error('[onAlarm] sync failed', { error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const safeSendResponse = (data: unknown): void => {
+    try {
+      sendResponse(data as never);
+    } catch {
+      // port closed, ignore
+    }
+  };
+  handleMessage(message as Message, sender)
+    .then((payload) => safeSendResponse({ success: true, ...(payload as object) }))
     .catch((error) => {
-      sendResponse({
+      safeSendResponse({
         success: false,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -144,11 +200,17 @@ interface Message {
   [key: string]: unknown;
 }
 
-async function handleMessage(message: Message): Promise<unknown> {
+async function handleMessage(message: Message, sender?: browser.Runtime.MessageSender): Promise<unknown> {
   await ensureDefaults();
   logger.debug('handleMessage', { type: message?.type });
 
-  switch (message?.type) {
+  if (!message?.type || !isKnownMessageType(message.type)) {
+    throw new Error(`unknown_message_type`);
+  }
+
+  const isExtensionPage = Boolean(sender?.url?.startsWith(browser.runtime.getURL('')));
+
+  switch (message.type) {
     case MESSAGE_TYPES.SAVE_WORD:
       return handleSaveWord((message.entry || message.word) as Partial<Word> & { word: string; contexts?: WordContext[]; bookId?: string });
     case MESSAGE_TYPES.DELETE_WORD:
@@ -181,6 +243,9 @@ async function handleMessage(message: Message): Promise<unknown> {
     case MESSAGE_TYPES.AUTH_SET_REMEMBER:
       return handleAuthSetRemember(message.remember as boolean);
     case MESSAGE_TYPES.AUTH_GET_CREDENTIALS:
+      if (!isExtensionPage) {
+        throw new Error('unauthorized_sender');
+      }
       return handleAuthGetCredentials();
     case MESSAGE_TYPES.TRANSLATE:
       return handleTranslate(message.word as string);
@@ -390,7 +455,7 @@ async function handleSaveWord(entry: Partial<Word> & { word: string; translation
 
 async function handleDeleteWord(id: string): Promise<{
   deleted: boolean;
-  sync: FlushResult;
+  sync?: FlushResult;
 }> {
   if (!id) {
     throw new Error('缺少单词 id');
@@ -400,13 +465,14 @@ async function handleDeleteWord(id: string): Promise<{
   const result = await deleteWordById(id);
   if (result.success) {
     await enqueueDelete(id);
+    flushSyncQueue(await getSettings(), true).catch((err) => {
+      logger.warn('[handleDeleteWord] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
+    });
   }
 
-  const sync = await flushSyncQueue(await getSettings());
   logger.info('handleDeleteWord success', { id, deleted: result.success });
   return {
     deleted: Boolean(result.success),
-    sync,
   };
 }
 
@@ -455,7 +521,11 @@ function toCsv(words: Word[]): string {
 }
 
 function csvEscape(value: unknown): string {
-  const text = String(value).replace(/"/g, '""');
+  let text = String(value);
+  if (/^[=+\-@]/.test(text)) {
+    text = `'${text}`;
+  }
+  text = text.replace(/"/g, '""');
   return `"${text}"`;
 }
 
@@ -522,7 +592,17 @@ async function setQueue<T = unknown>(key: string, queue: T[]): Promise<T[]> {
 }
 
 async function getSyncQueue(): Promise<SyncQueueEntry[]> {
-  return getQueue(STORAGE_SYNC_QUEUE);
+  const raw = await getQueue<Record<string, unknown>>(STORAGE_SYNC_QUEUE);
+  const valid = raw.filter((item) =>
+    item && typeof item === 'object' &&
+    typeof item.word === 'string' && item.word.length > 0 &&
+    typeof item.bookId === 'string'
+  ) as unknown as SyncQueueEntry[];
+  if (valid.length !== raw.length) {
+    logger.warn('getSyncQueue filtered corrupted entries', { raw: raw.length, valid: valid.length });
+    await setQueue(STORAGE_SYNC_QUEUE, valid);
+  }
+  return valid;
 }
 
 async function setSyncQueue(queue: SyncQueueEntry[]): Promise<SyncQueueEntry[]> {
@@ -576,9 +656,6 @@ async function enqueueDelete(wordId: string): Promise<void> {
   });
 }
 
-function normalizeBaseUrl(settings: Settings): string {
-  return normalizeSyncBaseUrl(settings?.syncBaseUrl);
-}
 
 function normalizeWordValue(word: unknown): string {
   return String(word || '').trim().toLowerCase();
@@ -633,8 +710,8 @@ async function syncForRead(settingsOverride?: Settings): Promise<void> {
   await flushSyncQueue(settings);
 }
 
-async function pullChanges(auth: AuthData, settings: Settings): Promise<void> {
-  const baseUrl = normalizeBaseUrl(settings);
+async function pullChanges(auth: AuthData): Promise<void> {
+  const baseUrl = DEFAULT_SYNC_BASE_URL;
   const headers = { Authorization: `Bearer ${auth.accessToken}` };
   logger.debug('pullChanges started', { baseUrl });
   const [books, words] = await Promise.all([
@@ -737,13 +814,13 @@ function mapLocalWordToServer(word: Word): ServerWordPayload {
   };
 }
 
-async function pushDeletes(auth: AuthData, settings: Settings): Promise<{ ok: boolean; processed: number }> {
+async function pushDeletes(auth: AuthData): Promise<{ ok: boolean; processed: number }> {
   const deleteQueue = await getDeleteQueue();
   if (deleteQueue.length === 0) {
     return { ok: true, processed: 0 };
   }
 
-  const baseUrl = normalizeBaseUrl(settings);
+  const baseUrl = DEFAULT_SYNC_BASE_URL;
   await fetchSyncJson(`${baseUrl}/api/v1/words/batch-delete`, {
     method: 'POST',
     headers: {
@@ -761,14 +838,14 @@ async function pushDeletes(auth: AuthData, settings: Settings): Promise<{ ok: bo
   return { ok: true, processed: deleteQueue.length };
 }
 
-async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: boolean; processed: number; error?: string; queueSize: number }> {
+async function pushWords(auth: AuthData): Promise<{ ok: boolean; processed: number; error?: string; queueSize: number }> {
   const syncQueue = await getSyncQueue();
   if (syncQueue.length === 0) {
     return { ok: true, processed: 0, queueSize: 0 };
   }
   logger.debug('pushWords started', { queueSize: syncQueue.length });
 
-  const baseUrl = normalizeBaseUrl(settings);
+  const baseUrl = DEFAULT_SYNC_BASE_URL;
 
   let syncBook: Book | null = null;
   const cachedBooks = await getBooks();
@@ -876,8 +953,8 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
   return { ok: true, processed: payload.length, queueSize: (await getSyncQueue()).length };
 }
 
-async function ensureDefaultBookOnServer(accessToken: string, settings: Settings): Promise<void> {
-  const baseUrl = normalizeBaseUrl(settings);
+async function ensureDefaultBookOnServer(accessToken: string): Promise<void> {
+  const baseUrl = DEFAULT_SYNC_BASE_URL;
   const serverBooks = await fetchSyncJson(`${baseUrl}/api/v1/books`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
@@ -948,6 +1025,32 @@ async function flushSyncQueue(settings: Settings, force: boolean = false): Promi
     return { ok: false, skipped: true, expired: true, queueSize };
   }
 
+  let activeAuth: AuthData = auth;
+  if (isAuthExpiringSoon(auth)) {
+    logger.debug('flushSyncQueue token expiring soon, refreshing in advance');
+    const { session: refreshedSession, error: refreshError } = await supabaseRefreshSession(auth.refreshToken);
+    if (refreshError || !refreshedSession) {
+      logger.warn('flushSyncQueue pre-refresh failed, will try on-demand', { error: refreshError?.message });
+    } else {
+      activeAuth = {
+        ...auth,
+        accessToken: refreshedSession.access_token,
+        refreshToken: refreshedSession.refresh_token,
+        user: refreshedSession.user
+          ? { email: refreshedSession.user.email || undefined, id: refreshedSession.user.id }
+          : auth.user,
+        expiresAt: refreshedSession.expires_at,
+      };
+      await setAuthData(activeAuth);
+      setSupabaseSession({
+        access_token: activeAuth.accessToken,
+        refresh_token: activeAuth.refreshToken,
+        user: activeAuth.user?.id ? { id: activeAuth.user.id, email: activeAuth.user.email } : undefined,
+        expires_at: activeAuth.expiresAt ?? undefined,
+      });
+    }
+  }
+
   if (isSyncing) {
     logger.debug('flushSyncQueue skipped (already syncing)');
     return { ok: true, skipped: true, queueSize };
@@ -964,30 +1067,31 @@ async function flushSyncQueue(settings: Settings, force: boolean = false): Promi
 
   try {
     setSupabaseSession({
-      access_token: auth.accessToken,
-      refresh_token: auth.refreshToken,
-      user: auth.user?.id ? { id: auth.user.id, email: auth.user.email } : undefined,
+      access_token: activeAuth.accessToken,
+      refresh_token: activeAuth.refreshToken,
+      user: activeAuth.user?.id ? { id: activeAuth.user.id, email: activeAuth.user.email } : undefined,
+      expires_at: activeAuth.expiresAt ?? undefined,
     });
 
     const currentAuth: AuthData = {
-      ...auth,
+      ...activeAuth,
     };
     let processed = 0;
 
     try {
-      processed += (await pushDeletes(currentAuth, settings)).processed;
-      const wordsResult = await pushWords(currentAuth, settings);
+      processed += (await pushDeletes(currentAuth)).processed;
+      const wordsResult = await pushWords(currentAuth);
       if (!wordsResult.ok) {
         throw new Error(wordsResult.error || 'word_sync_failed');
       }
       processed += wordsResult.processed;
-      await pullChanges(currentAuth, settings);
+      await pullChanges(currentAuth);
     } catch (error) {
       if (String((error as Error)?.message || error) !== 'unauthorized') {
         throw error;
       }
 
-      const { session: refreshedSession, error: refreshError } = await supabaseRefreshSession(auth.refreshToken);
+      const { session: refreshedSession, error: refreshError } = await supabaseRefreshSession(activeAuth.refreshToken);
       if (refreshError || !refreshedSession) {
         await setAuthData(null);
         await setCurrentUserEmail(null);
@@ -1001,17 +1105,17 @@ async function flushSyncQueue(settings: Settings, force: boolean = false): Promi
           ? { email: refreshedSession.user.email || undefined, id: refreshedSession.user.id }
           : currentAuth.user,
         lastSyncAt: currentAuth.lastSyncAt,
-        expiresAt: currentAuth.expiresAt,
+        expiresAt: refreshedSession.expires_at,
       };
       await setAuthData({ ...refreshedAuth, lastSyncAt: currentAuth.lastSyncAt });
 
-      processed = (await pushDeletes(refreshedAuth, settings)).processed;
-      const wordsResult = await pushWords(refreshedAuth, settings);
+      processed = (await pushDeletes(refreshedAuth)).processed;
+      const wordsResult = await pushWords(refreshedAuth);
       if (!wordsResult.ok) {
         throw new Error(wordsResult.error || 'word_sync_failed');
       }
       processed += wordsResult.processed;
-      await pullChanges(refreshedAuth, settings);
+      await pullChanges(refreshedAuth);
     }
 
     const finalSession = getSupabaseSession();
@@ -1021,7 +1125,7 @@ async function flushSyncQueue(settings: Settings, force: boolean = false): Promi
         refreshToken: finalSession.refresh_token,
         user: finalSession.user ? { email: finalSession.user.email, id: finalSession.user.id } : undefined,
         lastSyncAt: Date.now(),
-        expiresAt: auth.expiresAt,
+        expiresAt: finalSession.expires_at,
       });
     }
     await clearSyncFailure();
@@ -1080,117 +1184,19 @@ async function setAuthData(auth: AuthData | null): Promise<void> {
 // 记住登录态的有效期（7天）
 const REMEMBER_DEVICE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
-// 本地记住的登录凭证（用于回填登录表单）
 const STORAGE_REMEMBERED_CREDENTIALS = 'rememberedCredentials';
 
-interface RememberedCredentials {
-  email: string;
-  /** 简单 XOR 加密的密码（非安全级别，仅防直接读取） */
-  password: string;
-  savedAt: number;
-}
-
-/** 密码编码（使用 PBKDF2 派生密钥 + AES-GCM 加密） */
-async function encodePassword(pwd: string): Promise<string> {
-  if (!pwd) return '';
-  try {
-    const deviceId = await ensureDeviceId();
-    const encoder = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(deviceId),
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
-    const aesKey = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: encoder.encode('wordpicker-salt'), iterations: 100000, hash: 'SHA-256' },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const encrypted = await crypto.subtle.encrypt(
-      { name: 'AES-GCM', iv },
-      aesKey,
-      encoder.encode(pwd)
-    );
-    return btoa(JSON.stringify({ iv: Array.from(iv), data: Array.from(new Uint8Array(encrypted)) }));
-  } catch {
-    // 降级：使用设备 ID 派生的简单 XOR
-    const deviceId = await ensureDeviceId();
-    const deviceKey = deviceId.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0) % 256;
-    return btoa(pwd.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ deviceKey)).join(''));
+async function saveRememberedCredentials(email: string, _password: string, remember: boolean): Promise<void> {
+  if (remember) {
+    await browser.storage.local.set({
+      [STORAGE_REMEMBERED_CREDENTIALS]: {
+        email: email || '',
+        savedAt: Date.now(),
+      },
+    });
+  } else {
+    await browser.storage.local.remove([STORAGE_REMEMBERED_CREDENTIALS]);
   }
-}
-
-/** 密码解码 */
-async function decodePassword(encoded: string): Promise<string> {
-  if (!encoded) return '';
-  try {
-    const parsed = JSON.parse(atob(encoded));
-    const deviceId = await ensureDeviceId();
-    const encoder = new TextEncoder();
-    const keyMaterial = await crypto.subtle.importKey(
-      'raw',
-      encoder.encode(deviceId),
-      'PBKDF2',
-      false,
-      ['deriveKey']
-    );
-    const aesKey = await crypto.subtle.deriveKey(
-      { name: 'PBKDF2', salt: encoder.encode('wordpicker-salt'), iterations: 100000, hash: 'SHA-256' },
-      keyMaterial,
-      { name: 'AES-GCM', length: 256 },
-      false,
-      ['encrypt', 'decrypt']
-    );
-    const decrypted = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: new Uint8Array(parsed.iv) },
-      aesKey,
-      new Uint8Array(parsed.data)
-    );
-    return new TextDecoder().decode(decrypted);
-  } catch {
-    // 降级：尝试简单 XOR
-    try {
-      const deviceId = await ensureDeviceId();
-      const deviceKey = deviceId.split('').reduce((acc: number, c: string) => acc + c.charCodeAt(0), 0) % 256;
-      const decoded = atob(encoded);
-      return decoded.split('').map(c => String.fromCharCode(c.charCodeAt(0) ^ deviceKey)).join('');
-    } catch {
-      return '';
-    }
-  }
-}
-
-function isRememberedCredentials(value: unknown): value is RememberedCredentials {
-  return Boolean(
-    value &&
-    typeof value === 'object' &&
-    typeof (value as Partial<RememberedCredentials>).email === 'string' &&
-    typeof (value as Partial<RememberedCredentials>).password === 'string' &&
-    typeof (value as Partial<RememberedCredentials>).savedAt === 'number'
-  );
-}
-
-async function getRememberedCredentials(): Promise<RememberedCredentials | null> {
-  const data = await browser.storage.local.get([STORAGE_REMEMBERED_CREDENTIALS]);
-  const cred = data?.[STORAGE_REMEMBERED_CREDENTIALS];
-  return isRememberedCredentials(cred) ? cred : null;
-}
-
-// 保存登录凭证（email 始终保留以便回填；password 仅在勾选记住时保留，加密存储）
-async function saveRememberedCredentials(email: string, password: string, remember: boolean): Promise<void> {
-  const encryptedPassword = remember ? await encodePassword(password || '') : '';
-  await browser.storage.local.set({
-    [STORAGE_REMEMBERED_CREDENTIALS]: {
-      email: email || '',
-      password: encryptedPassword,
-      savedAt: Date.now(),
-    },
-  });
 }
 
 // 计算登录态过期时间：勾选“记住7天”则 7 天后过期，否则不设过期（长期保持直到手动登出）
@@ -1203,6 +1209,13 @@ function isAuthExpired(auth: AuthData): boolean {
   return typeof auth.expiresAt === 'number' && Date.now() > auth.expiresAt;
 }
 
+const TOKEN_REFRESH_LEAD_MS = 5 * 60 * 1000;
+
+function isAuthExpiringSoon(auth: AuthData): boolean {
+  if (typeof auth.expiresAt !== 'number') return false;
+  return Date.now() + TOKEN_REFRESH_LEAD_MS > auth.expiresAt;
+}
+
 // 勾选/取消“在此设备记住7天”时，更新当前登录态的过期时间
 async function handleAuthSetRemember(remember: boolean): Promise<{ ok: boolean }> {
   const auth = await getAuthData();
@@ -1210,35 +1223,23 @@ async function handleAuthSetRemember(remember: boolean): Promise<{ ok: boolean }
     return { ok: true };
   }
   await setAuthData({ ...auth, expiresAt: computeAuthExpiry(Boolean(remember)) });
-  // 取消勾选时清除已记住的密码，仅保留邮箱
   if (!remember) {
-    const cred = await getRememberedCredentials();
-    if (cred) {
-      await browser.storage.local.set({
-        [STORAGE_REMEMBERED_CREDENTIALS]: { ...cred, password: '' },
-      });
-    }
+    await browser.storage.local.remove([STORAGE_REMEMBERED_CREDENTIALS]);
   }
   return { ok: true };
 }
 
-// 获取回填用的登录凭证：7天内返回邮箱+密码，超过7天只返回邮箱
-async function handleAuthGetCredentials(): Promise<{ ok: boolean; email: string; password: string }> {
-  const cred = await getRememberedCredentials();
-  if (!cred) {
-    return { ok: true, email: '', password: '' };
+async function handleAuthGetCredentials(): Promise<{ ok: boolean; email: string }> {
+  try {
+    const data = await browser.storage.local.get([STORAGE_REMEMBERED_CREDENTIALS]);
+    const cred = data?.[STORAGE_REMEMBERED_CREDENTIALS] as { email?: string } | undefined;
+    if (cred && typeof cred.email === 'string' && cred.email) {
+      return { ok: true, email: cred.email };
+    }
+  } catch {
+    // ignore
   }
-  const expired = !cred.savedAt || Date.now() > cred.savedAt + REMEMBER_DEVICE_DURATION_MS;
-  if (expired && cred.password) {
-    // 超过7天：清除密码，仅保留邮箱
-    await browser.storage.local.set({
-      [STORAGE_REMEMBERED_CREDENTIALS]: { ...cred, password: '' },
-    });
-    return { ok: true, email: cred.email || '', password: '' };
-  }
-  // 解码存储的密码
-  const decodedPassword = cred.password ? await decodePassword(cred.password) : '';
-  return { ok: true, email: cred.email || '', password: expired ? '' : decodedPassword };
+  return { ok: true, email: '' };
 }
 
 // 存储当前登录用户的唯一标识（用于检测用户切换）
@@ -1266,6 +1267,7 @@ async function clearUserData(): Promise<void> {
     STORAGE_AUTH,
     STORAGE_REMEMBERED_CREDENTIALS,
     STORAGE_CURRENT_USER_EMAIL,
+    STORAGE_DEVICE_ID,
   ]);
 }
 
@@ -1302,7 +1304,9 @@ async function handleAuthLogin(email: string, password: string): Promise<AuthRes
   });
   await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
-  await flushSyncQueue(settings, true);
+  flushSyncQueue(settings, true).catch((err) => {
+    logger.warn('[handleAuthLogin] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
+  });
 
   return {
     ok: true,
@@ -1337,12 +1341,14 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
   await setupAlarms();
 
   try {
-    await ensureDefaultBookOnServer(session.access_token, settings);
+    await ensureDefaultBookOnServer(session.access_token);
   } catch (err) {
     logger.warn('[handleAuthRegister] 创建默认单词本失败:', (err as Error).message);
   }
 
-  await flushSyncQueue(settings, true);
+  flushSyncQueue(settings, true).catch((err) => {
+    logger.warn('[handleAuthRegister] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
+  });
 
   return {
     ok: true,
@@ -1363,9 +1369,19 @@ async function handleAuthLogout(): Promise<{ ok: boolean }> {
       logger.warn('[handleAuthLogout] Supabase 登出失败:', error);
     }
   }
+  try {
+    await browser.alarms.clear('sync-words');
+  } catch (err) {
+    logger.warn('[handleAuthLogout] clear alarm failed', { error: err instanceof Error ? err.message : String(err) });
+  }
   await setAuthData(null);
   await setCurrentUserEmail(null);
   await clearUserData();
+  try {
+    await browser.storage.local.remove(['deviceId']);
+  } catch (err) {
+    logger.warn('[handleAuthLogout] remove deviceId failed', { error: err instanceof Error ? err.message : String(err) });
+  }
   return { ok: true };
 }
 
