@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest';
 
-const DEFAULT_SYNC_BASE_URL = 'https://word-base.pages.dev';
-
-function normalizeBaseUrl(settings: { syncBaseUrl?: string }): string {
-  const settingsBaseUrl = typeof settings?.syncBaseUrl === 'string' ? settings.syncBaseUrl.trim() : '';
-  return (settingsBaseUrl || DEFAULT_SYNC_BASE_URL).replace(/\/+$/, '');
-}
-
 function normalizeWordValue(word: unknown): string {
   return String(word || '').trim().toLowerCase();
 }
@@ -35,34 +28,6 @@ function lowercaseFirstLetter(word: string): string {
   }
   return text;
 }
-
-describe('normalizeBaseUrl', () => {
-  it('should use settings URL when provided', () => {
-    expect(normalizeBaseUrl({ syncBaseUrl: 'https://custom.example.com' }))
-      .toBe('https://custom.example.com');
-  });
-
-  it('should use default URL when settings URL is empty', () => {
-    expect(normalizeBaseUrl({ syncBaseUrl: '' })).toBe(DEFAULT_SYNC_BASE_URL);
-    expect(normalizeBaseUrl({ syncBaseUrl: '   ' })).toBe(DEFAULT_SYNC_BASE_URL);
-    expect(normalizeBaseUrl({})).toBe(DEFAULT_SYNC_BASE_URL);
-    expect(normalizeBaseUrl(undefined as unknown as { syncBaseUrl?: string })).toBe(DEFAULT_SYNC_BASE_URL);
-  });
-
-  it('should strip trailing slashes', () => {
-    expect(normalizeBaseUrl({ syncBaseUrl: 'https://example.com/' }))
-      .toBe('https://example.com');
-    expect(normalizeBaseUrl({ syncBaseUrl: 'https://example.com//' }))
-      .toBe('https://example.com');
-    expect(normalizeBaseUrl({ syncBaseUrl: 'https://example.com/api//' }))
-      .toBe('https://example.com/api');
-  });
-
-  it('should trim whitespace', () => {
-    expect(normalizeBaseUrl({ syncBaseUrl: '  https://example.com  ' }))
-      .toBe('https://example.com');
-  });
-});
 
 describe('normalizeWordValue', () => {
   it('should convert to lowercase and trim', () => {
