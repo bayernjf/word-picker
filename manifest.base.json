@@ -2,10 +2,13 @@
   "manifest_version": 3,
   "name": "WordPicker",
   "version": "1.0.0",
-  "description": "按住 Ctrl 悬停查词，一键收录到单词本。",
+  "description": "按住修饰键悬停单词即可弹窗查词，支持一键收录到云端单词本。",
+  "short_name": "WordPicker",
   "author": "bayernjf",
+  "minimum_chrome_version": "110",
   "icons": {
     "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
     "48": "assets/icons/icon48.png",
     "128": "assets/icons/icon128.png"
   },
@@ -16,8 +19,7 @@
   "host_permissions": [
     "https://api.dictionaryapi.dev/*",
     "https://api.mymemory.translated.net/*",
-    "https://dict.youdao.com/*",
-    "<all_urls>"
+    "https://dict.youdao.com/*"
   ],
   "content_scripts": [
     {
@@ -39,6 +41,7 @@
     "default_title": "WordPicker - 单词本",
     "default_icon": {
       "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
       "48": "assets/icons/icon48.png",
       "128": "assets/icons/icon128.png"
     }
@@ -46,5 +49,8 @@
   "options_ui": {
     "page": "options/options.html",
     "open_in_tab": true
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'"
   }
 }
