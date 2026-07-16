@@ -22,9 +22,11 @@ import {
   selectPreferredSyncBook,
   normalizeContextValue,
   normalizeSourceLinkValue,
+  normalizeSyncBaseUrl,
+  fetchSyncJson,
   Book,
 } from '../lib/utils.js';
-import { DEFAULT_SYNC_BASE_URL, QUEUE_MAX_LENGTH } from '../lib/constants.js';
+import { QUEUE_MAX_LENGTH } from '../lib/constants.js';
 import { MESSAGE_TYPES } from '../lib/messaging.js';
 import { createLogger } from '../lib/logger.js';
 import {
@@ -32,6 +34,7 @@ import {
   getSupabaseSession,
   signInWithPassword,
   signUp,
+  signOut,
   refreshSession as supabaseRefreshSession,
 } from '../lib/supabase.js';
 import type { TranslationResult } from '../lib/translator.js';
@@ -44,10 +47,45 @@ const STORAGE_SYNC_QUEUE = 'syncQueue';
 const STORAGE_DELETE_QUEUE = 'deleteQueue';
 const STORAGE_AUTH = 'authData';
 const STORAGE_SYNC_LOCK = 'syncLock';
+const STORAGE_SYNC_FAILURE = 'syncFailure';
 
 let isSyncing = false;
 
 const SYNC_LOCK_TIMEOUT_MS = 120_000;
+const SYNC_RETRY_BASE_MS = 3 * 60_000;
+const SYNC_RETRY_MAX_MS = 60 * 60_000;
+
+interface SyncFailureState {
+  attempts: number;
+  retryAfter: number;
+  error: string;
+}
+
+async function getSyncFailure(): Promise<SyncFailureState | null> {
+  const data = await browser.storage.local.get([STORAGE_SYNC_FAILURE]);
+  const failure = data?.[STORAGE_SYNC_FAILURE] as Partial<SyncFailureState> | undefined;
+  if (!failure || typeof failure.retryAfter !== 'number') {
+    return null;
+  }
+  return {
+    attempts: Math.max(1, Number(failure.attempts) || 1),
+    retryAfter: failure.retryAfter,
+    error: String(failure.error || 'sync_failed'),
+  };
+}
+
+async function recordSyncFailure(error: string): Promise<SyncFailureState> {
+  const previous = await getSyncFailure();
+  const attempts = (previous?.attempts || 0) + 1;
+  const delay = Math.min(SYNC_RETRY_BASE_MS * 2 ** (attempts - 1), SYNC_RETRY_MAX_MS);
+  const failure = { attempts, retryAfter: Date.now() + delay, error };
+  await browser.storage.local.set({ [STORAGE_SYNC_FAILURE]: failure });
+  return failure;
+}
+
+async function clearSyncFailure(): Promise<void> {
+  await browser.storage.local.remove([STORAGE_SYNC_FAILURE]);
+}
 
 async function syncLockAcquire(): Promise<boolean> {
   const data = await browser.storage.local.get([STORAGE_SYNC_LOCK]);
@@ -163,6 +201,7 @@ interface AuthData {
 
 interface SyncQueueEntry extends Word {
   id?: string;
+  queueRevision?: string;
 }
 
 interface ServerBook {
@@ -226,6 +265,24 @@ interface ServerWordPayload {
     sourceTitle: string;
     createdAt: number;
   };
+}
+
+function isServerBook(value: unknown): value is ServerBook {
+  return Boolean(value && typeof value === 'object' && typeof (value as ServerBook).id === 'string' && (value as ServerBook).id);
+}
+
+function isServerWord(value: unknown): value is ServerWord {
+  const word = value as ServerWord;
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      typeof word.id === 'string' &&
+      word.id &&
+      typeof word.word === 'string' &&
+      word.word &&
+      typeof word.book_id === 'string' &&
+      word.book_id
+  );
 }
 
 async function handleSaveWord(entry: Partial<Word> & { word: string; translation?: string; frequency?: number; timeAdded?: number; timeUpdated?: number; contexts?: WordContext[]; bookId?: string }): Promise<{
@@ -403,7 +460,7 @@ function csvEscape(value: unknown): string {
 }
 
 async function handleSyncNow(): Promise<FlushResult> {
-  return flushSyncQueue(await getSettings());
+  return flushSyncQueue(await getSettings(), true);
 }
 
 interface SyncStatusResult {
@@ -480,32 +537,47 @@ async function setDeleteQueue(queue: string[]): Promise<string[]> {
   return setQueue(STORAGE_DELETE_QUEUE, queue);
 }
 
+let queueMutationChain: Promise<void> = Promise.resolve();
+
+async function runQueueMutation<T>(mutation: () => Promise<T>): Promise<T> {
+  const result = queueMutationChain.then(mutation);
+  queueMutationChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
 async function enqueueSyncEntry(entry: SyncQueueEntry): Promise<void> {
   if (!entry?.word) {
     return;
   }
 
-  const queue = await getSyncQueue();
-  const nextEntry = {
-    ...entry,
-    id: entry.id || entry._legacy?.id || `${entry.word}-${entry.timeAdded || Date.now()}`,
-  };
-  const nextKey = getQueuedWordKey(nextEntry);
-  const dedupedQueue = queue.filter((item) => getQueuedWordKey(item) !== nextKey);
-  await setSyncQueue([nextEntry, ...dedupedQueue].slice(0, QUEUE_MAX_LENGTH));
+  await runQueueMutation(async () => {
+    const queue = await getSyncQueue();
+    const nextEntry = {
+      ...entry,
+      id: entry.id || entry._legacy?.id || `${entry.word}-${entry.timeAdded || Date.now()}`,
+      queueRevision: globalThis.crypto?.randomUUID
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    };
+    const nextKey = getQueuedWordKey(nextEntry);
+    const dedupedQueue = queue.filter((item) => getQueuedWordKey(item) !== nextKey);
+    await setSyncQueue([nextEntry, ...dedupedQueue].slice(0, QUEUE_MAX_LENGTH));
+  });
 }
 
 async function enqueueDelete(wordId: string): Promise<void> {
-  const queue = await getDeleteQueue();
-  if (queue.includes(wordId)) {
-    return;
-  }
-  await setDeleteQueue([wordId, ...queue].slice(0, QUEUE_MAX_LENGTH));
+  await runQueueMutation(async () => {
+    const syncQueue = await getSyncQueue();
+    const deleteQueue = await getDeleteQueue();
+    await setSyncQueue(syncQueue.filter((entry) => entry.id !== wordId && entry._legacy?.id !== wordId));
+    if (!deleteQueue.includes(wordId)) {
+      await setDeleteQueue([wordId, ...deleteQueue].slice(0, QUEUE_MAX_LENGTH));
+    }
+  });
 }
 
 function normalizeBaseUrl(settings: Settings): string {
-  const settingsBaseUrl = typeof settings?.syncBaseUrl === 'string' ? settings.syncBaseUrl.trim() : '';
-  return (settingsBaseUrl || DEFAULT_SYNC_BASE_URL).replace(/\/+$/, '');
+  return normalizeSyncBaseUrl(settings?.syncBaseUrl);
 }
 
 function normalizeWordValue(word: unknown): string {
@@ -540,6 +612,14 @@ function getQueuedWordKey(entry: SyncQueueEntry): string {
   return `${normalizeWordValue(entry?.word)}::${normalizeBookValue(entry?.bookId)}`;
 }
 
+function getQueueRevision(entry: SyncQueueEntry): string {
+  return entry.queueRevision || [
+    getQueuedWordKey(entry),
+    Number(entry.timeUpdated) || 0,
+    JSON.stringify(entry.contexts || []),
+  ].join('::');
+}
+
 async function syncForRead(settingsOverride?: Settings): Promise<void> {
   const auth = await getAuthData();
   if (!auth?.accessToken || !auth?.refreshToken) {
@@ -555,33 +635,31 @@ async function syncForRead(settingsOverride?: Settings): Promise<void> {
 
 async function pullChanges(auth: AuthData, settings: Settings): Promise<void> {
   const baseUrl = normalizeBaseUrl(settings);
-  const token = auth.accessToken;
+  const headers = { Authorization: `Bearer ${auth.accessToken}` };
   logger.debug('pullChanges started', { baseUrl });
-  const [booksRes, wordsRes] = await Promise.all([
-    fetch(`${baseUrl}/api/v1/books`, { headers: { Authorization: `Bearer ${token}` } }),
-    fetch(`${baseUrl}/api/v1/words`, { headers: { Authorization: `Bearer ${token}` } }),
+  const [books, words] = await Promise.all([
+    fetchSyncJson(`${baseUrl}/api/v1/books`, { headers }),
+    fetchSyncJson(`${baseUrl}/api/v1/words`, { headers }),
   ]);
 
-  if (booksRes.status === 401 || wordsRes.status === 401) {
-    throw new Error('unauthorized');
+  if (!Array.isArray(books) || !books.every(isServerBook)) {
+    throw new Error('sync_invalid_books_payload');
+  }
+  if (!Array.isArray(words) || !words.every(isServerWord)) {
+    throw new Error('sync_invalid_words_payload');
   }
 
-  let bookCount = 0;
-  let wordCount = 0;
-  if (booksRes.ok) {
-    const books = await booksRes.json();
-    const localBooks = Array.isArray(books) ? books.map(mapServerBookToLocal) : [];
-    await saveBooks(localBooks);
-    bookCount = localBooks.length;
-  }
-
-  if (wordsRes.ok) {
-    const words = await wordsRes.json();
-    const localWords = Array.isArray(words) ? words.map(mapServerWordToLocal) : [];
-    await saveWords(localWords);
-    wordCount = localWords.length;
-  }
-  logger.info('pullChanges success', { books: bookCount, words: wordCount });
+  const localBooks = books.map(mapServerBookToLocal);
+  const localWords = words.map(mapServerWordToLocal);
+  const pendingWords = await getSyncQueue();
+  const pendingKeys = new Set(pendingWords.map(getQueuedWordKey));
+  const mergedWords = [
+    ...pendingWords,
+    ...localWords.filter((word) => !pendingKeys.has(getQueuedWordKey(word))),
+  ];
+  await saveBooks(localBooks);
+  await saveWords(mergedWords);
+  logger.info('pullChanges success', { books: localBooks.length, words: mergedWords.length });
 }
 
 function mapServerBookToLocal(book: ServerBook): Book {
@@ -666,7 +744,7 @@ async function pushDeletes(auth: AuthData, settings: Settings): Promise<{ ok: bo
   }
 
   const baseUrl = normalizeBaseUrl(settings);
-  const response = await fetch(`${baseUrl}/api/v1/words/batch-delete`, {
+  await fetchSyncJson(`${baseUrl}/api/v1/words/batch-delete`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -675,15 +753,11 @@ async function pushDeletes(auth: AuthData, settings: Settings): Promise<{ ok: bo
     body: JSON.stringify({ wordIds: deleteQueue }),
   });
 
-  if (response.status === 401) {
-    throw new Error('unauthorized');
-  }
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || 'delete_sync_failed');
-  }
-
-  await setDeleteQueue([]);
+  const processedIds = new Set(deleteQueue);
+  await runQueueMutation(async () => {
+    const currentQueue = await getDeleteQueue();
+    await setDeleteQueue(currentQueue.filter((wordId) => !processedIds.has(wordId)));
+  });
   return { ok: true, processed: deleteQueue.length };
 }
 
@@ -701,74 +775,65 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
   syncBook = selectPreferredSyncBook(cachedBooks);
 
   if (!syncBook) {
-    try {
-      const booksRes = await fetch(`${baseUrl}/api/v1/books`, {
-        headers: { Authorization: `Bearer ${auth.accessToken}` },
-      });
-      if (booksRes.ok) {
-        const serverBooks = await booksRes.json();
-        const serverSyncBook = Array.isArray(serverBooks)
-          ? serverBooks.find((b: ServerBook) => b.is_sync)
-          : null;
-        if (serverSyncBook) {
-          syncBook = { id: serverSyncBook.id, name: serverSyncBook.name, isSync: true };
-          await saveBooks(serverBooks.map(mapServerBookToLocal));
-        }
-      }
-    } catch (err) {
-      logger.warn('[pushWords] 无法从服务器获取单词本:', (err as Error).message);
-    }
-  }
-
-  const serverWordsMap = new Map<string, { level: string; familiarity: number; syncVersion: number }>();
-  try {
-    const wordsRes = await fetch(`${baseUrl}/api/v1/words`, {
+    const serverBooks = await fetchSyncJson(`${baseUrl}/api/v1/books`, {
       headers: { Authorization: `Bearer ${auth.accessToken}` },
     });
-    if (wordsRes.ok) {
-      const serverWords = await wordsRes.json();
-      if (Array.isArray(serverWords)) {
-        serverWords.forEach((word: ServerWord) => {
-          const key = `${normalizeWordValue(word.word || '')}::${normalizeBookValue(word.book_id || '')}`;
-          serverWordsMap.set(key, {
-            level: word.level || 'B2',
-            familiarity: Number(word.familiarity) || 0,
-            syncVersion: Number(word.sync_version) || 0,
-          });
-        });
-      }
+    if (!Array.isArray(serverBooks) || !serverBooks.every(isServerBook)) {
+      throw new Error('sync_invalid_books_payload');
     }
-  } catch (err) {
-    logger.warn('[pushWords] 无法从服务器获取已有单词:', (err as Error).message);
+    const mappedBooks = serverBooks.map(mapServerBookToLocal);
+    syncBook = selectPreferredSyncBook(mappedBooks);
+    await saveBooks(mappedBooks);
   }
 
-  const payload = syncQueue
-    .map((item) => {
-      const mapped = mapLocalWordToServer(item);
-      const bookId = mapped.book_id;
-      if ((!bookId || bookId === 'local_default_book' || bookId.length < 10) && syncBook) {
-        mapped.book_id = syncBook.id;
-      }
-      const key = `${normalizeWordValue(mapped.word)}::${normalizeBookValue(mapped.book_id)}`;
-      const existingSrs = serverWordsMap.get(key);
-      if (existingSrs) {
-        mapped.level = existingSrs.level;
-        mapped.familiarity = existingSrs.familiarity;
-        (mapped as ServerWordPayload & { sync_version?: number }).sync_version = existingSrs.syncVersion;
-      }
-      return mapped;
-    })
-    .filter((item) => typeof item.book_id === 'string' && item.book_id.length > 20)
-    .reduce((list, item) => {
-      const key = `${normalizeWordValue(item.word)}::${normalizeBookValue(item.book_id)}`;
-      const index = list.findIndex((candidate) => `${normalizeWordValue(candidate.word)}::${normalizeBookValue(candidate.book_id)}` === key);
-      if (index === -1) {
-        list.push(item);
-      } else {
-        list[index] = item;
-      }
-      return list;
-    }, [] as ServerWordPayload[]);
+  const serverWords = await fetchSyncJson(`${baseUrl}/api/v1/words`, {
+    headers: { Authorization: `Bearer ${auth.accessToken}` },
+  });
+  if (!Array.isArray(serverWords) || !serverWords.every(isServerWord)) {
+    throw new Error('sync_invalid_words_payload');
+  }
+
+  const serverWordsMap = new Map<string, ServerWord>();
+  serverWords.forEach((serverWord) => {
+    const key = `${normalizeWordValue(serverWord.word || '')}::${normalizeBookValue(serverWord.book_id || '')}`;
+    serverWordsMap.set(key, serverWord);
+  });
+
+  const payloadByKey = new Map<string, { payload: ServerWordPayload; queueRevisions: Set<string> }>();
+  syncQueue.forEach((item) => {
+    const mapped = mapLocalWordToServer(item);
+    const bookId = mapped.book_id;
+    if ((!bookId || bookId === 'local_default_book' || bookId.length < 10) && syncBook) {
+      mapped.book_id = syncBook.id;
+    }
+    if (typeof mapped.book_id !== 'string' || mapped.book_id.length <= 20) {
+      return;
+    }
+
+    const key = `${normalizeWordValue(mapped.word)}::${normalizeBookValue(mapped.book_id)}`;
+    const existingServerWord = serverWordsMap.get(key);
+    if (existingServerWord) {
+      mapped.phonetic = existingServerWord.phonetic || mapped.phonetic;
+      mapped.part_of_speech = existingServerWord.part_of_speech || mapped.part_of_speech;
+      mapped.definition = existingServerWord.definition || mapped.definition;
+      mapped.chinese_translation = existingServerWord.chinese_translation || mapped.chinese_translation;
+      mapped.synonyms = Array.isArray(existingServerWord.synonyms) ? existingServerWord.synonyms : mapped.synonyms;
+      mapped.examples = Array.isArray(existingServerWord.examples) ? existingServerWord.examples : mapped.examples;
+      mapped.usage_history = Array.isArray(existingServerWord.usage_history) ? existingServerWord.usage_history : mapped.usage_history;
+      mapped.level = existingServerWord.level || mapped.level;
+      mapped.familiarity = Number(existingServerWord.familiarity) || 0;
+      (mapped as ServerWordPayload & { sync_version?: number }).sync_version = Number(existingServerWord.sync_version) || 0;
+    }
+
+    const existing = payloadByKey.get(key);
+    if (existing) {
+      existing.payload = mapped;
+      existing.queueRevisions.add(getQueueRevision(item));
+    } else {
+      payloadByKey.set(key, { payload: mapped, queueRevisions: new Set([getQueueRevision(item)]) });
+    }
+  });
+  const payload = [...payloadByKey.values()].map((entry) => entry.payload);
 
   if (payload.length === 0) {
     logger.warn('[pushWords] 无法同步单词：没有可用的 book_id，已缓存待下次同步');
@@ -777,7 +842,7 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
 
   logger.info(`[pushWords] 准备同步 ${payload.length} 个单词，book_id: ${payload[0]?.book_id}`);
 
-  const response = await fetch(`${baseUrl}/api/v1/words/batch`, {
+  const syncResponse = await fetchSyncJson(`${baseUrl}/api/v1/words/batch`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -785,25 +850,27 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
     },
     body: JSON.stringify({ words: payload }),
   });
-
-  if (response.status === 401) {
-    throw new Error('unauthorized');
+  if (!syncResponse || typeof syncResponse !== 'object' || Array.isArray(syncResponse)) {
+    throw new Error('sync_invalid_batch_payload');
   }
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || 'word_sync_failed');
+  const conflicts = Array.isArray((syncResponse as { conflicts?: unknown }).conflicts)
+    ? (syncResponse as { conflicts: unknown[] }).conflicts.map(normalizeWordValue)
+    : [];
+  const conflictSet = new Set(conflicts);
+  const syncedQueueRevisions = new Set(
+    [...payloadByKey.entries()]
+      .filter(([, entry]) => !conflictSet.has(normalizeWordValue(entry.payload.word)))
+      .flatMap(([, entry]) => [...entry.queueRevisions])
+  );
+  if (syncedQueueRevisions.size > 0) {
+    await runQueueMutation(async () => {
+      const currentQueue = await getSyncQueue();
+      await setSyncQueue(currentQueue.filter((item) => !syncedQueueRevisions.has(getQueueRevision(item))));
+    });
+    logger.info(`[pushWords] 同步完成，清除 ${syncedQueueRevisions.size} 条，队列剩余 ${(await getSyncQueue()).length} 条`);
   }
-
-  // 清除已同步的队列项：通过匹配 word + bookId 组合
-  const syncedPairs = new Set(payload.map((item) => `${normalizeWordValue(item.word)}::${normalizeBookValue(item.book_id)}`));
-  if (syncedPairs.size > 0) {
-    await setSyncQueue(
-      syncQueue.filter((item) => {
-        const pair = `${normalizeWordValue(item.word)}::${normalizeBookValue(item.bookId || '')}`;
-        return !syncedPairs.has(pair);
-      })
-    );
-    logger.info(`[pushWords] 同步完成，清除 ${syncedPairs.size} 条，队列剩余 ${(await getSyncQueue()).length} 条`);
+  if (conflictSet.size > 0) {
+    throw new Error('sync_conflict');
   }
 
   return { ok: true, processed: payload.length, queueSize: (await getSyncQueue()).length };
@@ -811,19 +878,15 @@ async function pushWords(auth: AuthData, settings: Settings): Promise<{ ok: bool
 
 async function ensureDefaultBookOnServer(accessToken: string, settings: Settings): Promise<void> {
   const baseUrl = normalizeBaseUrl(settings);
-  const booksRes = await fetch(`${baseUrl}/api/v1/books`, {
+  const serverBooks = await fetchSyncJson(`${baseUrl}/api/v1/books`, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
-
-  if (!booksRes.ok) {
-    throw new Error('failed_to_fetch_books');
+  if (!Array.isArray(serverBooks) || !serverBooks.every(isServerBook)) {
+    throw new Error('sync_invalid_books_payload');
   }
 
-  const serverBooks = await booksRes.json();
-  const hasAnyBook = Array.isArray(serverBooks) && serverBooks.length > 0;
-
-  if (!hasAnyBook) {
-    const createRes = await fetch(`${baseUrl}/api/v1/books`, {
+  if (serverBooks.length === 0) {
+    const newBook = await fetchSyncJson(`${baseUrl}/api/v1/books`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -835,15 +898,15 @@ async function ensureDefaultBookOnServer(accessToken: string, settings: Settings
         is_sync: true,
       }),
     });
-
-    if (createRes.ok) {
-      const newBook = await createRes.json();
-      await saveBooks([mapServerBookToLocal(newBook)]);
-      logger.info('[ensureDefaultBookOnServer] 默认单词本创建成功:', newBook.id);
-    } else {
-      const text = await createRes.text();
-      throw new Error(`failed_to_create_default_book: ${text}`);
+    if (!newBook || typeof newBook !== 'object' || Array.isArray(newBook)) {
+      throw new Error('sync_invalid_book_payload');
     }
+    const mappedBook = mapServerBookToLocal(newBook as ServerBook);
+    if (!mappedBook.id) {
+      throw new Error('sync_invalid_book_payload');
+    }
+    await saveBooks([mappedBook]);
+    logger.info('[ensureDefaultBookOnServer] 默认单词本创建成功:', mappedBook.id);
   } else {
     await saveBooks(serverBooks.map(mapServerBookToLocal));
   }
@@ -859,11 +922,19 @@ interface FlushResult {
   error?: string;
 }
 
-async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
+async function flushSyncQueue(settings: Settings, force: boolean = false): Promise<FlushResult> {
   const auth = await getAuthData();
   const syncQueue = await getSyncQueue();
   const deleteQueue = await getDeleteQueue();
   const queueSize = syncQueue.length + deleteQueue.length;
+
+  if (!force) {
+    const failure = await getSyncFailure();
+    if (failure && failure.retryAfter > Date.now()) {
+      logger.debug('flushSyncQueue skipped (backoff)', { retryAfter: failure.retryAfter });
+      return { ok: false, skipped: true, queueSize, error: failure.error };
+    }
+  }
 
   if (!auth?.accessToken || !auth?.refreshToken) {
     logger.debug('flushSyncQueue skipped (not logged in)', { queueSize });
@@ -901,10 +972,15 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
     const currentAuth: AuthData = {
       ...auth,
     };
+    let processed = 0;
 
     try {
-      await pushDeletes(currentAuth, settings);
-      await pushWords(currentAuth, settings);
+      processed += (await pushDeletes(currentAuth, settings)).processed;
+      const wordsResult = await pushWords(currentAuth, settings);
+      if (!wordsResult.ok) {
+        throw new Error(wordsResult.error || 'word_sync_failed');
+      }
+      processed += wordsResult.processed;
       await pullChanges(currentAuth, settings);
     } catch (error) {
       if (String((error as Error)?.message || error) !== 'unauthorized') {
@@ -927,10 +1003,14 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
         lastSyncAt: currentAuth.lastSyncAt,
         expiresAt: currentAuth.expiresAt,
       };
-      await setAuthData({ ...refreshedAuth, lastSyncAt: Date.now() });
+      await setAuthData({ ...refreshedAuth, lastSyncAt: currentAuth.lastSyncAt });
 
-      await pushDeletes(refreshedAuth, settings);
-      await pushWords(refreshedAuth, settings);
+      processed = (await pushDeletes(refreshedAuth, settings)).processed;
+      const wordsResult = await pushWords(refreshedAuth, settings);
+      if (!wordsResult.ok) {
+        throw new Error(wordsResult.error || 'word_sync_failed');
+      }
+      processed += wordsResult.processed;
       await pullChanges(refreshedAuth, settings);
     }
 
@@ -944,25 +1024,29 @@ async function flushSyncQueue(settings: Settings): Promise<FlushResult> {
         expiresAt: auth.expiresAt,
       });
     }
+    await clearSyncFailure();
     logger.info('flushSyncQueue success', { queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length });
 
     return {
       ok: true,
-      processed: 1,
+      processed,
       queueSize: (await getSyncQueue()).length + (await getDeleteQueue()).length,
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    const isNetworkError =
+    const failure = await recordSyncFailure(msg);
+    const isTransientError =
       msg === 'Failed to fetch' ||
       msg.includes('NetworkError') ||
       msg.includes('network') ||
       msg.includes('timeout') ||
-      msg.includes('AbortError');
-    if (isNetworkError) {
-      logger.warn('flushSyncQueue skipped (network error)', { error: msg });
+      msg.includes('AbortError') ||
+      msg.startsWith('sync_http_') ||
+      msg.startsWith('sync_invalid_');
+    if (isTransientError) {
+      logger.warn('flushSyncQueue deferred', { error: msg, retryAfter: failure.retryAfter });
     } else {
-      logger.error('flushSyncQueue failed', { error: msg });
+      logger.error('flushSyncQueue failed', { error: msg, retryAfter: failure.retryAfter });
     }
     return {
       ok: false,
@@ -1218,7 +1302,7 @@ async function handleAuthLogin(email: string, password: string): Promise<AuthRes
   });
   await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
-  await flushSyncQueue(settings);
+  await flushSyncQueue(settings, true);
 
   return {
     ok: true,
@@ -1258,7 +1342,7 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
     logger.warn('[handleAuthRegister] 创建默认单词本失败:', (err as Error).message);
   }
 
-  await flushSyncQueue(settings);
+  await flushSyncQueue(settings, true);
 
   return {
     ok: true,
@@ -1268,9 +1352,19 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
 }
 
 async function handleAuthLogout(): Promise<{ ok: boolean }> {
+  const auth = await getAuthData();
+  if (auth?.accessToken) {
+    try {
+      const result = await signOut(auth.accessToken);
+      if (result.error) {
+        logger.warn('[handleAuthLogout] Supabase 登出失败:', result.error.message);
+      }
+    } catch (error) {
+      logger.warn('[handleAuthLogout] Supabase 登出失败:', error);
+    }
+  }
   await setAuthData(null);
   await setCurrentUserEmail(null);
-  // 登出时清空数据，但注意不要清空设置
   await clearUserData();
   return { ok: true };
 }
