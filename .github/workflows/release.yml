@@ -68,6 +68,7 @@ jobs:
             RELEASE_NAME="${GITHUB_REF_NAME}"
             GEN_NOTES="true"
             SYNC_BASE_URL="https://word-base.pages.dev"
+            APP_URL="https://word-base.pages.dev/app"
           elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
             # Auto-bump version based on latest v* tag
             LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
@@ -87,6 +88,7 @@ jobs:
             RELEASE_NAME="$NEW_TAG"
             GEN_NOTES="true"
             SYNC_BASE_URL="https://word-base.pages.dev"
+            APP_URL="https://word-base.pages.dev/app"
           else
             # dev branch -> snapshot (fixed version 0.0.0.0 so each build overwrites the previous)
             TAG_NAME="snapshot"
@@ -95,6 +97,7 @@ jobs:
             RELEASE_NAME="Dev Snapshot"
             GEN_NOTES="false"
             SYNC_BASE_URL="https://dev.word-base.pages.dev"
+            APP_URL="https://dev.word-base.pages.dev/app"
           fi
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "manifest_version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
@@ -102,6 +105,7 @@ jobs:
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
           echo "gen_notes=$GEN_NOTES" >> "$GITHUB_OUTPUT"
           echo "sync_base_url=$SYNC_BASE_URL" >> "$GITHUB_OUTPUT"
+          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
           echo "Resolved: tag=$TAG_NAME version=$MANIFEST_VERSION prerelease=$IS_PRERELEASE"
 
       - name: Build dictionary
@@ -116,6 +120,7 @@ jobs:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           RELEASE_VERSION: ${{ steps.resolve-tag.outputs.manifest_version }}
           SYNC_BASE_URL: ${{ steps.resolve-tag.outputs.sync_base_url }}
+          WORD_BASE_APP_URL: ${{ steps.resolve-tag.outputs.app_url }}
         run: npm run build
 
       - name: Pack all extensions
