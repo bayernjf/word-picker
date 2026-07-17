@@ -17,18 +17,19 @@ export interface MessageResponse {
 }
 
 export function sendMessage<TResponse extends { success: boolean; error?: string } = MessageResponse>(message: object, timeoutMs: number = 5000): Promise<TResponse> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    browser.runtime.sendMessage(message),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`消息发送超时（${timeoutMs}ms）`)), timeoutMs)
-    ),
-  ]).then((response) => {
-    const res = response as TResponse;
-    if (!res?.success) {
-      throw new Error(res?.error || "扩展消息请求失败");
-    }
-    return res;
-  });
+    browser.runtime.sendMessage(message).then((response) => {
+      const res = response as TResponse;
+      if (!res?.success) {
+        throw new Error(res?.error || "扩展消息请求失败");
+      }
+      return res;
+    }),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`消息发送超时（${timeoutMs}ms）`)), timeoutMs);
+    }),
+  ]).finally(() => { if (timer !== undefined) clearTimeout(timer); });
 }
 
 export function formatDate(timeValue: number | string): string {
@@ -86,6 +87,9 @@ function readQueueCount(...values: (number | undefined)[]): number {
 }
 
 export function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return fallback;
@@ -149,4 +153,42 @@ export function selectPreferredSyncBook(books: Book[]): Book | null {
       const rightUpdated = Number(right.updatedAt) || Number(right.createdAt) || 0;
       return rightUpdated - leftUpdated;
     })[0] || null;
+}
+
+export async function fetchSyncJson(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs: number = 15_000
+): Promise<unknown> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    if (response.status === 401) {
+      throw new Error('unauthorized');
+    }
+
+    const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+    if (!response.ok) {
+      throw new Error(`sync_http_${response.status}`);
+    }
+    if (!contentType.includes('json')) {
+      throw new Error(`sync_invalid_response_${response.status}_${contentType || 'unknown'}`);
+    }
+
+    const body = await response.text();
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      throw new Error(`sync_invalid_json_${response.status}`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new Error('sync_request_timeout');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

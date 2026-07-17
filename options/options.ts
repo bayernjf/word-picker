@@ -133,12 +133,9 @@ async function refreshAuthStatus(): Promise<void> {
 
 async function fillRememberedCredentials(): Promise<void> {
   try {
-    const response = await sendMessage({ type: "AUTH_GET_CREDENTIALS" }) as unknown as { ok: boolean; email: string; password: string };
+    const response = await sendMessage({ type: "AUTH_GET_CREDENTIALS" }) as unknown as { ok: boolean; email: string };
     if (response?.email && !(form as SettingsFormElements).authEmail.value) {
       (form as SettingsFormElements).authEmail.value = response.email;
-    }
-    if (response?.password && !(form as SettingsFormElements).authPassword.value) {
-      (form as SettingsFormElements).authPassword.value = response.password;
     }
   } catch (error) {
     logger.warn("回填登录凭证失败：", error);

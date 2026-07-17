@@ -3,8 +3,9 @@ import {
   selectPreferredSyncBook,
   normalizeContextValue,
   normalizeSourceLinkValue,
+  clampNumber,
 } from "./utils.js";
-import { DEFAULT_SYNC_BASE_URL } from "./constants.js";
+import { SETTINGS_LIMITS } from "./constants.js";
 import type { LookupKey } from "./constants.js";
 import type { Book } from "./utils.js";
 
@@ -57,8 +58,8 @@ export interface Settings {
   maxCacheSize: number;
   syncEnabled: boolean;
   rememberDevice7Days: boolean;
-  syncBaseUrl: string;
   fireworksEffect: "canvas" | "css" | "none";
+  logLevel: "debug" | "info" | "warn" | "error";
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -73,8 +74,8 @@ export const DEFAULT_SETTINGS: Settings = {
   maxCacheSize: 200,
   syncEnabled: true,
   rememberDevice7Days: false,
-  syncBaseUrl: DEFAULT_SYNC_BASE_URL,
   fireworksEffect: "canvas",
+  logLevel: "warn",
 };
 
 const STORAGE_KEYS = {
@@ -175,20 +176,43 @@ export async function ensureDefaults(): Promise<StorageData> {
   ]);
 
   const patch: Record<string, unknown> = {};
+  let wordsNeedsMigration = false;
+  let wordsArray: Word[] = [];
   if (!Array.isArray(current.words)) {
     patch[STORAGE_KEYS.WORDS] = [];
+    wordsNeedsMigration = true;
+    wordsArray = [];
   } else {
-    // 迁移旧格式数据
     const migratedWords = (current.words as Array<Record<string, unknown>>).map((word) => {
       if (isOldFormat(word as unknown as Partial<Word> & { [key: string]: unknown })) {
+        wordsNeedsMigration = true;
         return migrateOldWordFormat(word as OldWordFormat);
       }
       return word as unknown as Word;
     });
-    patch[STORAGE_KEYS.WORDS] = migratedWords;
+    wordsArray = migratedWords;
+
+    const seen = new Set<string>();
+    const deduped: Word[] = [];
+    for (const word of migratedWords) {
+      const key = `${String(word.word || '').toLowerCase()}::${String(word.bookId || '')}`;
+      if (!word?.word || typeof word.word !== 'string' || seen.has(key)) {
+        wordsNeedsMigration = true;
+        continue;
+      }
+      seen.add(key);
+      deduped.push(word);
+    }
+    if (deduped.length !== migratedWords.length) {
+      wordsArray = deduped;
+      wordsNeedsMigration = true;
+    }
+
+    if (wordsNeedsMigration) {
+      patch[STORAGE_KEYS.WORDS] = wordsArray;
+    }
   }
 
-  // 确保有单词本
   if (!Array.isArray(current[STORAGE_KEYS.BOOKS]) || (current[STORAGE_KEYS.BOOKS] as unknown[]).length === 0) {
     patch[STORAGE_KEYS.BOOKS] = [{
       id: 'local_default_book',
@@ -205,32 +229,39 @@ export async function ensureDefaults(): Promise<StorageData> {
   if (!current.cache || typeof current.cache !== "object" || Array.isArray(current.cache)) {
     patch[STORAGE_KEYS.CACHE] = {};
   }
-  patch[STORAGE_KEYS.SETTINGS] = {
+
+  let settingsNeedsMigration = false;
+  const mergedSettings: Settings = {
     ...DEFAULT_SETTINGS,
-    ...(current.settings || {}),
+    ...(current.settings as Partial<Settings> || {}),
   };
 
-  const settingsPatch = patch[STORAGE_KEYS.SETTINGS] as Record<string, unknown>;
-  if (settingsPatch.lookupKey !== undefined && !settingsPatch.lookupKeys) {
-    const oldKey = settingsPatch.lookupKey as LookupKey;
-    settingsPatch.lookupKeys = {
+  const settingsRecord = mergedSettings as unknown as Record<string, unknown>;
+  if (settingsRecord.lookupKey !== undefined && !settingsRecord.lookupKeys) {
+    const oldKey = settingsRecord.lookupKey as LookupKey;
+    mergedSettings.lookupKeys = {
       mac: oldKey,
       win: oldKey,
     };
-    delete settingsPatch.lookupKey;
-  } else if (settingsPatch.lookupKeys) {
-    const keys = settingsPatch.lookupKeys as Partial<PerPlatformLookupKeys>;
-    settingsPatch.lookupKeys = {
+    delete settingsRecord.lookupKey;
+    settingsNeedsMigration = true;
+  } else if (settingsRecord.lookupKeys) {
+    const keys = settingsRecord.lookupKeys as Partial<PerPlatformLookupKeys>;
+    const normalizedKeys = {
       mac: keys.mac || "Control",
       win: keys.win || "Control",
     };
+    if (keys.mac !== normalizedKeys.mac || keys.win !== normalizedKeys.win) {
+      settingsNeedsMigration = true;
+    }
+    mergedSettings.lookupKeys = normalizedKeys;
   }
 
-  if (typeof settingsPatch.syncBaseUrl === 'string') {
-    const url = settingsPatch.syncBaseUrl.replace(/\/+$/, '');
-    if (url.endsWith('/app')) {
-      settingsPatch.syncBaseUrl = url.slice(0, -4) || DEFAULT_SYNC_BASE_URL;
-    }
+  const currentSettings = current.settings as Partial<Settings> | undefined;
+  const beforeMergeJson = JSON.stringify({ ...DEFAULT_SETTINGS, ...(currentSettings || {}) });
+  const afterMergeJson = JSON.stringify(mergedSettings);
+  if (beforeMergeJson !== afterMergeJson || settingsNeedsMigration) {
+    patch[STORAGE_KEYS.SETTINGS] = mergedSettings;
   }
 
   if (Object.keys(patch).length > 0) {
@@ -238,34 +269,65 @@ export async function ensureDefaults(): Promise<StorageData> {
   }
 
   return {
-    words: (Array.isArray(patch[STORAGE_KEYS.WORDS]) ? patch[STORAGE_KEYS.WORDS] : Array.isArray(current.words) ? current.words : []) as Word[],
+    words: wordsArray,
     books: (Array.isArray(patch[STORAGE_KEYS.BOOKS]) ? patch[STORAGE_KEYS.BOOKS] : Array.isArray(current[STORAGE_KEYS.BOOKS]) ? current[STORAGE_KEYS.BOOKS] : []) as Book[],
     cache: (current.cache && typeof current.cache === 'object' && !Array.isArray(current.cache) ? current.cache : {}) as Record<string, unknown>,
-    settings: patch[STORAGE_KEYS.SETTINGS] as Settings,
+    settings: patch[STORAGE_KEYS.SETTINGS] ? (patch[STORAGE_KEYS.SETTINGS] as Settings) : mergedSettings,
   };
 }
 
 export async function getSettings(): Promise<Settings> {
+  if (settingsCacheValid && cachedSettings) {
+    return cachedSettings;
+  }
   const { settings } = await ensureDefaults();
+  cachedSettings = settings;
+  settingsCacheValid = true;
   return settings;
 }
 
 export async function saveSettings(settingsPatch: Partial<Settings>): Promise<Settings> {
+  const current = await getSettings();
   const settings = {
-    ...(await getSettings()),
+    ...current,
     ...settingsPatch,
   };
+  settings.hoverDelay = clampNumber(
+    settings.hoverDelay,
+    SETTINGS_LIMITS.HOVER_DELAY_MIN,
+    SETTINGS_LIMITS.HOVER_DELAY_MAX,
+    SETTINGS_LIMITS.HOVER_DELAY_DEFAULT
+  );
+  settings.maxCacheSize = Math.floor(clampNumber(
+    settings.maxCacheSize,
+    SETTINGS_LIMITS.CACHE_SIZE_MIN,
+    SETTINGS_LIMITS.CACHE_SIZE_MAX,
+    SETTINGS_LIMITS.CACHE_SIZE_DEFAULT
+  ));
   await browser.storage.local.set({ [STORAGE_KEYS.SETTINGS]: settings });
+  cachedSettings = settings;
+  settingsCacheValid = true;
   return settings;
 }
 
 export async function getWords(): Promise<Word[]> {
+  if (wordsCacheValid && cachedWords) {
+    return cachedWords;
+  }
   const { words } = await ensureDefaults();
+  cachedWords = words;
+  wordsCacheValid = true;
   return words;
 }
 
 export async function saveWords(words: Word[]): Promise<Word[]> {
+  return runWordsMutation(async () => saveWordsInternal(words));
+}
+
+async function saveWordsInternal(words: Word[]): Promise<Word[]> {
   await browser.storage.local.set({ [STORAGE_KEYS.WORDS]: words });
+  cachedWords = words;
+  wordsCacheValid = true;
   return words;
 }
 
@@ -275,7 +337,32 @@ export interface AddWordResult {
   entry: Word;
 }
 
+let wordsMutationChain: Promise<unknown> = Promise.resolve();
+
+async function runWordsMutation<T>(mutation: () => Promise<T>): Promise<T> {
+  const result = wordsMutationChain.then(mutation);
+  wordsMutationChain = result.then(() => undefined, () => undefined);
+  return result as Promise<T>;
+}
+
+let cachedSettings: Settings | null = null;
+let settingsCacheValid = false;
+
+let cachedWords: Word[] | null = null;
+let wordsCacheValid = false;
+
+export function _resetCachesForTesting(): void {
+  cachedSettings = null;
+  settingsCacheValid = false;
+  cachedWords = null;
+  wordsCacheValid = false;
+}
+
 export async function addWord(entry: Omit<Word, 'bookId'> & { bookId?: string }): Promise<AddWordResult> {
+  return runWordsMutation(async () => addWordInternal(entry));
+}
+
+async function addWordInternal(entry: Omit<Word, 'bookId'> & { bookId?: string }): Promise<AddWordResult> {
   const words = await getWords();
   const books = await getBooks();
 
@@ -339,7 +426,7 @@ export async function addWord(entry: Omit<Word, 'bookId'> & { bookId?: string })
       return timeB - timeA;
     });
 
-    await saveWords(nextWords);
+    await saveWordsInternal(nextWords);
 
     return {
       success: true,
@@ -356,7 +443,7 @@ export async function addWord(entry: Omit<Word, 'bookId'> & { bookId?: string })
     return timeB - timeA;
   });
 
-  await saveWords(nextWords);
+  await saveWordsInternal(nextWords);
 
   return {
     success: true,
@@ -366,13 +453,15 @@ export async function addWord(entry: Omit<Word, 'bookId'> & { bookId?: string })
 }
 
 export async function deleteWordById(id: string): Promise<{ success: boolean }> {
-  const words = await getWords();
-  const nextWords = words.filter((item) =>
-    item.id !== id && item._legacy?.id !== id);
-  await saveWords(nextWords);
-  return {
-    success: nextWords.length !== words.length,
-  };
+  return runWordsMutation(async () => {
+    const words = await getWords();
+    const nextWords = words.filter((item) =>
+      item.id !== id && item._legacy?.id !== id);
+    await saveWordsInternal(nextWords);
+    return {
+      success: nextWords.length !== words.length,
+    };
+  });
 }
 
 // 兼容旧数据：时间可能是字符串也可能是数字

@@ -12,9 +12,13 @@ export type ExtensionFixture = {
   loggedInContext: BrowserContext;
 };
 
-// 使用环境变量或硬编码账号密码
-const TEST_EMAIL = process.env.TEST_EMAIL || '2467055074@qq.com';
-const TEST_PASSWORD = process.env.TEST_PASSWORD || 'ffffff';
+// 测试账号通过环境变量注入，不硬编码凭证
+const TEST_EMAIL = process.env.TEST_EMAIL ?? '';
+const TEST_PASSWORD = process.env.TEST_PASSWORD ?? '';
+
+if (!TEST_EMAIL || !TEST_PASSWORD) {
+  throw new Error('E2E 测试需要设置 TEST_EMAIL 和 TEST_PASSWORD 环境变量');
+}
 
 export const test = base.extend<ExtensionFixture>({
   context: async (_useArgs, use) => {

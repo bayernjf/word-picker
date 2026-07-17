@@ -88,6 +88,8 @@ function buildForBrowser(target: "chrome" | "safari"): void {
 
   const merged = deepMerge(baseManifest, browserManifest);
 
+  injectDynamicHostPermissions(merged);
+
   // Inject version from RELEASE_VERSION env (set by CI)
   // Chrome/Safari manifest requires version like x.y.z or x.y.z.w (no 'v' prefix, no +metadata)
   let releaseVersion = process.env.RELEASE_VERSION?.trim().replace(/^v/, "");
@@ -146,7 +148,7 @@ function rewritePolyfillImports(distDir: string): void {
 }
 
 const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".woff2", ".ttf", ".ico"]);
-const HTML_APP_URL_PROD = "https://word-base.pages.dev/app";
+const HTML_APP_URL_LOCAL = "http://localhost:3000/app";
 
 function copyDirContents(src: string, dest: string): void {
   const entries = fs.readdirSync(src, { withFileTypes: true });
@@ -164,34 +166,35 @@ function copyDirContents(src: string, dest: string): void {
         fs.writeFileSync(destPath, content);
       } else {
         let content = fs.readFileSync(srcPath, "utf-8");
-        content = replaceEnvVars(content, ext === ".html");
+        content = replaceEnvVars(content, ext === ".html", srcPath);
         fs.writeFileSync(destPath, content);
       }
     }
   }
 }
 
-function replaceEnvVars(content: string, isHtml: boolean = false): string {
+function replaceEnvVars(content: string, isHtml: boolean = false, filePath?: string): string {
   const supabaseUrl = process.env.SUPABASE_URL ?? '';
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ?? '';
   const syncBaseUrl = process.env.SYNC_BASE_URL ?? '';
   const wordBaseAppUrl = process.env.WORD_BASE_APP_URL ?? '';
-  const prodSyncBase = "https://word-base.pages.dev";
-  const prodAppUrl = "https://word-base.pages.dev/app";
+  const localSyncBase = "http://localhost:3001";
+  const localAppUrl = "http://localhost:3000/app";
 
+  const before = content;
   // Replace readEnv/readBuildEnv calls in supabase.ts
   content = content.replace(/read(Build)?Env\(['"]SUPABASE_URL['"]\)/g, JSON.stringify(supabaseUrl));
   content = content.replace(/read(Build)?Env\(['"]SUPABASE_ANON_KEY['"]\)/g, JSON.stringify(supabaseAnonKey));
   // Replace constants.ts literal defaults with env values (only when env is provided)
   if (syncBaseUrl) {
     content = content.replace(
-      new RegExp(`export const DEFAULT_SYNC_BASE_URL = ${JSON.stringify(prodSyncBase)}`),
+      new RegExp(`export const DEFAULT_SYNC_BASE_URL = ${JSON.stringify(localSyncBase)}`),
       `export const DEFAULT_SYNC_BASE_URL = ${JSON.stringify(syncBaseUrl)}`
     );
   }
   if (wordBaseAppUrl) {
     content = content.replace(
-      new RegExp(`export const WORD_BASE_APP_URL = ${JSON.stringify(prodAppUrl)}`),
+      new RegExp(`export const WORD_BASE_APP_URL = ${JSON.stringify(localAppUrl)}`),
       `export const WORD_BASE_APP_URL = ${JSON.stringify(wordBaseAppUrl)}`
     );
   }
@@ -200,9 +203,49 @@ function replaceEnvVars(content: string, isHtml: boolean = false): string {
   content = content.replace(/process\.env\.SUPABASE_ANON_KEY/g, JSON.stringify(supabaseAnonKey));
   // Replace hardcoded WordBase app URLs in HTML files only
   if (isHtml && wordBaseAppUrl) {
-    content = content.replace(new RegExp(HTML_APP_URL_PROD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), wordBaseAppUrl);
+    content = content.replace(new RegExp(HTML_APP_URL_LOCAL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), wordBaseAppUrl);
   }
+
+  if (content !== before) {
+    const remainingReadEnv = content.match(/read(Build)?Env\(['"]\w+['"]\)/g);
+    if (remainingReadEnv) {
+      const uniq = [...new Set(remainingReadEnv)];
+      console.warn(`[build] 未替换的 readEnv 调用 in ${filePath || 'unknown'}: ${uniq.join(', ')}`);
+    }
+  }
+
   return content;
+}
+
+function injectDynamicHostPermissions(merged: Record<string, unknown>): void {
+  const supabaseUrl = process.env.SUPABASE_URL ?? '';
+  const syncBaseUrl = process.env.SYNC_BASE_URL ?? '';
+
+  const origins = new Set<string>(
+    (Array.isArray(merged.host_permissions) ? (merged.host_permissions as string[]) : [])
+      .filter((item) => typeof item === 'string')
+  );
+
+  const addOriginFromUrl = (rawUrl: string): void => {
+    if (!rawUrl) return;
+    try {
+      const url = new URL(rawUrl);
+      origins.add(`${url.protocol}//${url.host}/*`);
+    } catch {
+      // ignore invalid URL
+    }
+  };
+
+  addOriginFromUrl(supabaseUrl);
+  addOriginFromUrl(syncBaseUrl);
+
+  const localDefaults = ['http://localhost:3001', 'http://localhost:3000'];
+  for (const local of localDefaults) {
+    addOriginFromUrl(local);
+  }
+
+  merged.host_permissions = [...origins];
+  console.log(`[build-cross-browser] host_permissions: ${JSON.stringify(merged.host_permissions)}`);
 }
 
 function main(): void {
@@ -210,6 +253,30 @@ function main(): void {
   if (!fs.existsSync(SRC)) {
     console.error("[build-cross-browser] dist/extension not found. Run build:ts first.");
     process.exit(1);
+  }
+
+  const requiredEnv = ["SUPABASE_URL", "SUPABASE_ANON_KEY"];
+  const missingEnv = requiredEnv.filter((key) => !process.env[key]);
+  if (missingEnv.length > 0) {
+    console.error(`[build-cross-browser] Missing required env vars: ${missingEnv.join(", ")}`);
+    console.error("[build-cross-browser] Create .env.local with production values. See .env.example.");
+    process.exit(1);
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL ?? "";
+  if (!supabaseUrl.startsWith("https://") && !supabaseUrl.startsWith("http://localhost")) {
+    console.error(`[build-cross-browser] SUPABASE_URL must be https (got: ${supabaseUrl})`);
+    process.exit(1);
+  }
+
+  const isProduction = !!(process.env.SYNC_BASE_URL && !process.env.SYNC_BASE_URL.includes("localhost"));
+  if (isProduction) {
+    const prodEnv = ["SYNC_BASE_URL", "WORD_BASE_APP_URL"];
+    const missingProd = prodEnv.filter((key) => !process.env[key]);
+    if (missingProd.length > 0) {
+      console.error(`[build-cross-browser] Missing required prod env vars: ${missingProd.join(", ")}`);
+      process.exit(1);
+    }
   }
 
   // Copy static assets to dist/extension first (popup.html, options.html, etc.)

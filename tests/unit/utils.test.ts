@@ -1,4 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
+import { fetchSyncJson } from '../../lib/utils.js';
+
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  vi.restoreAllMocks();
+});
 
 // 直接复制测试函数，避免依赖 webextension-polyfill
 function escapeHtml(value: unknown): string {
@@ -38,6 +46,77 @@ function normalizeSourceLinkValue(context: { sourceLink?: string; source_link?: 
     return raw;
   }
 }
+
+describe('fetchSyncJson', () => {
+  const TEST_URL = 'https://word-base.pages.dev/api/v1/books';
+
+  it('should parse a successful JSON response', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([{ id: 'book-1' }]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+      })
+    );
+
+    await expect(fetchSyncJson(TEST_URL)).resolves.toEqual([{ id: 'book-1' }]);
+  });
+
+  it('should reject HTML responses without exposing the body', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('<!doctype html><html>secret page</html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html; charset=utf-8' },
+      })
+    );
+
+    await expect(fetchSyncJson(TEST_URL))
+      .rejects.toThrow('sync_invalid_response_200_text/html; charset=utf-8');
+  });
+
+  it('should map unauthorized responses to the refresh signal', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await expect(fetchSyncJson(TEST_URL)).rejects.toThrow('unauthorized');
+  });
+
+  it('should reject non-success status without parsing the body', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('<!doctype html>', {
+        status: 502,
+        headers: { 'Content-Type': 'text/html' },
+      })
+    );
+
+    await expect(fetchSyncJson(TEST_URL)).rejects.toThrow('sync_http_502');
+  });
+
+  it('should reject invalid JSON responses', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      new Response('{invalid', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await expect(fetchSyncJson(TEST_URL)).rejects.toThrow('sync_invalid_json_200');
+  });
+
+  it('should abort requests after the timeout', async () => {
+    globalThis.fetch = vi.fn().mockImplementation((_url: string, init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+      })
+    );
+
+    await expect(fetchSyncJson(TEST_URL, {}, 1))
+      .rejects.toThrow('sync_request_timeout');
+  });
+});
 
 describe('escapeHtml', () => {
   it('should escape special characters', () => {

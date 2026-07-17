@@ -1,4 +1,4 @@
-type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
   debug: 0,
@@ -7,22 +7,43 @@ const LEVEL_PRIORITY: Record<LogLevel, number> = {
   error: 3,
 };
 
-const STORAGE_KEY = 'wordpicker-log-level';
+let minLevel: LogLevel = 'warn';
+let initialized = false;
+let initPromise: Promise<void> | null = null;
 
-function getMinLevel(): LogLevel {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved && saved in LEVEL_PRIORITY) return saved as LogLevel;
-  } catch {
-    // ignore
+async function loadLevelFromStorage(): Promise<void> {
+  if (initialized) return;
+  if (initPromise) {
+    await initPromise;
+    return;
   }
-  // 默认只输出 warn/error，开发调试时可在控制台执行：
-  // localStorage.setItem('wordpicker-log-level', 'debug')
-  return 'warn';
+  initPromise = (async () => {
+    try {
+      const storage = await import('./storage.js');
+      const settings = await storage.getSettings();
+      if (settings.logLevel && settings.logLevel in LEVEL_PRIORITY) {
+        minLevel = settings.logLevel;
+      }
+    } catch {
+      // ignore, keep default
+    }
+    initialized = true;
+  })();
+  await initPromise;
+}
+
+export function setLogLevel(level: LogLevel): void {
+  if (level in LEVEL_PRIORITY) {
+    minLevel = level;
+  }
+}
+
+export function getLogLevel(): LogLevel {
+  return minLevel;
 }
 
 function isLevelEnabled(level: LogLevel): boolean {
-  return LEVEL_PRIORITY[level] >= LEVEL_PRIORITY[getMinLevel()];
+  return LEVEL_PRIORITY[level] >= LEVEL_PRIORITY[minLevel];
 }
 
 function formatTime(): string {
@@ -34,6 +55,17 @@ function formatTime(): string {
   );
 }
 
+function safeStringify(obj: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(obj, (_key, value) => {
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) return '[Circular]';
+      seen.add(value);
+    }
+    return value;
+  });
+}
+
 function formatArgs(args: unknown[]): unknown[] {
   return args.map((arg) => {
     if (arg instanceof Error) {
@@ -41,7 +73,7 @@ function formatArgs(args: unknown[]): unknown[] {
     }
     if (typeof arg === 'object' && arg !== null) {
       try {
-        return JSON.stringify(arg);
+        return safeStringify(arg);
       } catch {
         return String(arg);
       }
@@ -79,5 +111,6 @@ export class Logger {
 }
 
 export function createLogger(namespace: string): Logger {
+  void loadLevelFromStorage();
   return new Logger(namespace);
 }

@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach } from "vitest";
-import { ensureDefaults, addWord, getWords, getBooks } from "../../lib/storage.js";
+import { ensureDefaults, addWord, getWords, getBooks, _resetCachesForTesting } from "../../lib/storage.js";
 import { MESSAGE_TYPES } from "../../lib/messaging.js";
 import { resetStorageState } from "../setup.js";
 
@@ -7,6 +7,7 @@ describe("Service Worker Integration", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     resetStorageState();
+    _resetCachesForTesting();
   });
 
   describe("Word Management", () => {

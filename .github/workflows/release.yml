@@ -5,8 +5,8 @@ name: Release
 # 三种触发方式：
 #   1. 推送 v* tag → 正式发布（使用指定 tag 名）
 #   2. push 到 main 分支 → 正式发布（自动递增 patch 版本号）
-#   3. push 到 dev 分支 → Dev Snapshot（prerelease: true，tag 为 snapshot，
-#      每次覆盖上一个，产物始终指向最新 dev 的可用构建）
+#   3. push 到 dev 分支 → Dev Snapshot（prerelease: true，tag=snapshot，
+#      版本固定 0.0.0.0，每次覆盖上一个，浏览器直接覆盖安装）
 #
 # 使用方式（正式发版，指定版本）：
 #   git tag v0.1.0
@@ -61,13 +61,14 @@ jobs:
       - name: Resolve release tag & version
         id: resolve-tag
         run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
           if [[ "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ]]; then
             TAG_NAME="${GITHUB_REF_NAME}"
             MANIFEST_VERSION="${GITHUB_REF_NAME#v}"
             IS_PRERELEASE="false"
             RELEASE_NAME="${GITHUB_REF_NAME}"
             GEN_NOTES="true"
+            SYNC_BASE_URL="https://word-base.pages.dev"
+            APP_URL="https://word-base.pages.dev/app"
           elif [[ "${GITHUB_REF_NAME}" == "main" ]]; then
             # Auto-bump version based on latest v* tag
             LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -n 1)
@@ -86,21 +87,25 @@ jobs:
             IS_PRERELEASE="false"
             RELEASE_NAME="$NEW_TAG"
             GEN_NOTES="true"
+            SYNC_BASE_URL="https://word-base.pages.dev"
+            APP_URL="https://word-base.pages.dev/app"
           else
-            # dev branch -> snapshot
+            # dev branch -> snapshot (fixed version 0.0.0.0 so each build overwrites the previous)
             TAG_NAME="snapshot"
-            # Chrome manifest version must be x.y.z.w, use date+time as build number
-            BUILD_NUM=$(date -u +%Y%m%d%H%M)
-            MANIFEST_VERSION="0.0.0.${BUILD_NUM}"
+            MANIFEST_VERSION="0.0.0.0"
             IS_PRERELEASE="true"
-            RELEASE_NAME="Dev Snapshot (${SHORT_SHA})"
+            RELEASE_NAME="Dev Snapshot"
             GEN_NOTES="false"
+            SYNC_BASE_URL="https://dev.word-base.pages.dev"
+            APP_URL="https://dev.word-base.pages.dev/app"
           fi
           echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
           echo "manifest_version=$MANIFEST_VERSION" >> "$GITHUB_OUTPUT"
           echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
           echo "release_name=$RELEASE_NAME" >> "$GITHUB_OUTPUT"
           echo "gen_notes=$GEN_NOTES" >> "$GITHUB_OUTPUT"
+          echo "sync_base_url=$SYNC_BASE_URL" >> "$GITHUB_OUTPUT"
+          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
           echo "Resolved: tag=$TAG_NAME version=$MANIFEST_VERSION prerelease=$IS_PRERELEASE"
 
       - name: Build dictionary
@@ -114,6 +119,8 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           RELEASE_VERSION: ${{ steps.resolve-tag.outputs.manifest_version }}
+          SYNC_BASE_URL: ${{ steps.resolve-tag.outputs.sync_base_url }}
+          WORD_BASE_APP_URL: ${{ steps.resolve-tag.outputs.app_url }}
         run: npm run build
 
       - name: Pack all extensions
