@@ -1,5 +1,5 @@
 import browser from "webextension-polyfill";
-import { DEFAULT_BOOK_NAME, DEFAULT_SYNC_BASE_URL } from "./constants.js";
+import { DEFAULT_BOOK_NAME } from "./constants.js";
 
 export function escapeHtml(value: unknown): string {
   return String(value || "")
@@ -17,18 +17,19 @@ export interface MessageResponse {
 }
 
 export function sendMessage<TResponse extends { success: boolean; error?: string } = MessageResponse>(message: object, timeoutMs: number = 5000): Promise<TResponse> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    browser.runtime.sendMessage(message),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`消息发送超时（${timeoutMs}ms）`)), timeoutMs)
-    ),
-  ]).then((response) => {
-    const res = response as TResponse;
-    if (!res?.success) {
-      throw new Error(res?.error || "扩展消息请求失败");
-    }
-    return res;
-  });
+    browser.runtime.sendMessage(message).then((response) => {
+      const res = response as TResponse;
+      if (!res?.success) {
+        throw new Error(res?.error || "扩展消息请求失败");
+      }
+      return res;
+    }),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`消息发送超时（${timeoutMs}ms）`)), timeoutMs);
+    }),
+  ]).finally(() => { if (timer !== undefined) clearTimeout(timer); });
 }
 
 export function formatDate(timeValue: number | string): string {
@@ -86,6 +87,9 @@ function readQueueCount(...values: (number | undefined)[]): number {
 }
 
 export function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
     return fallback;
@@ -149,32 +153,6 @@ export function selectPreferredSyncBook(books: Book[]): Book | null {
       const rightUpdated = Number(right.updatedAt) || Number(right.createdAt) || 0;
       return rightUpdated - leftUpdated;
     })[0] || null;
-}
-
-export function normalizeSyncBaseUrl(value: unknown, fallback: string = DEFAULT_SYNC_BASE_URL): string {
-  const normalizedFallback = normalizeAllowedSyncUrl(fallback) || DEFAULT_SYNC_BASE_URL.replace(/\/+$/, '');
-  return normalizeAllowedSyncUrl(value) || normalizedFallback;
-}
-
-function normalizeAllowedSyncUrl(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null;
-  }
-
-  try {
-    const url = new URL(value.trim());
-    const isLocalHttp = url.protocol === 'http:' && (
-      url.hostname === 'localhost' ||
-      url.hostname === '127.0.0.1' ||
-      url.hostname === '[::1]'
-    );
-    if (url.protocol !== 'https:' && !isLocalHttp) {
-      return null;
-    }
-    return url.toString().replace(/\/+$/, '');
-  } catch {
-    return null;
-  }
 }
 
 export async function fetchSyncJson(

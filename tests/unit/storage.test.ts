@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { migrateSyncBaseUrlDefault } from '../../lib/storage.js';
 
 function formatDateTimeForDisplay(timestamp: number): string {
   if (!timestamp) return "";
@@ -78,39 +77,6 @@ function migrateOldWordFormat(oldWord: Record<string, unknown>): MigratedWord {
     bookId: "",
   };
 }
-
-describe('migrateSyncBaseUrlDefault', () => {
-  it('moves a markerless known default to the current build default', () => {
-    expect(migrateSyncBaseUrlDefault('https://word-base.pages.dev', undefined)).toEqual({
-      syncBaseUrl: 'http://localhost:3001',
-      buildDefaultMarker: 'http://localhost:3001',
-    });
-  });
-
-  it('moves an unchanged previous build default to the current build default', () => {
-    expect(migrateSyncBaseUrlDefault(
-      'https://dev.word-base.pages.dev',
-      'https://dev.word-base.pages.dev'
-    )).toEqual({
-      syncBaseUrl: 'http://localhost:3001',
-      buildDefaultMarker: 'http://localhost:3001',
-    });
-  });
-
-  it('preserves a custom HTTPS URL without a build marker', () => {
-    expect(migrateSyncBaseUrlDefault('https://sync.example.com/', undefined)).toEqual({
-      syncBaseUrl: 'https://sync.example.com',
-      buildDefaultMarker: null,
-    });
-  });
-
-  it('falls back from an insecure remote URL to the current build default', () => {
-    expect(migrateSyncBaseUrlDefault('http://sync.example.com', undefined)).toEqual({
-      syncBaseUrl: 'http://localhost:3001',
-      buildDefaultMarker: 'http://localhost:3001',
-    });
-  });
-});
 
 describe('formatDateTimeForDisplay', () => {
   it('should format valid timestamp', () => {

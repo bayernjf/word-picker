@@ -3,13 +3,10 @@
     "service_worker": "service/service-worker.js",
     "type": "module"
   },
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'"
-  },
   "commands": {
     "_execute_action": {
       "suggested_key": {
-        "default": "Ctrl+Shift+W"
+        "default": "Ctrl+Shift+U"
       }
     }
   }

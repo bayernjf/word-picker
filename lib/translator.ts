@@ -47,11 +47,12 @@ export interface TranslationResult {
 
 // 给 Promise 加超时，避免单个慢接口拖慢整体
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
-    promise,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`请求超时（${ms}ms）`)), ms)
-    ),
+    promise.finally(() => { if (timer !== undefined) clearTimeout(timer); }),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`请求超时（${ms}ms）`)), ms);
+    }),
   ]);
 }
 
@@ -91,14 +92,17 @@ interface YoudaoResult {
 
 // 翻译 API 并发限流器
 const MAX_CONCURRENT_TRANSLATE = 3;
+const MAX_QUEUED_TRANSLATE = 50;
 let concurrentRequests = 0;
 const requestQueue: Array<() => void> = [];
 
 function acquireTranslateSlot(): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (concurrentRequests < MAX_CONCURRENT_TRANSLATE) {
       concurrentRequests++;
       resolve();
+    } else if (requestQueue.length >= MAX_QUEUED_TRANSLATE) {
+      reject(new Error("translate_queue_full"));
     } else {
       requestQueue.push(() => {
         concurrentRequests++;
@@ -119,7 +123,7 @@ function releaseTranslateSlot(): void {
 async function translateWithFreeApis(word: string, useYoudao: boolean = true): Promise<TranslationResult> {
   await acquireTranslateSlot();
   try {
-    return doTranslateWithFreeApis(word, useYoudao);
+    return await doTranslateWithFreeApis(word, useYoudao);
   } finally {
     releaseTranslateSlot();
   }
