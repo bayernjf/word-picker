@@ -1181,10 +1181,17 @@ async function setAuthData(auth: AuthData | null): Promise<void> {
   await browser.storage.local.set({ [STORAGE_AUTH]: auth });
 }
 
-// 记住登录态的有效期（7天）
-const REMEMBER_DEVICE_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
-
 const STORAGE_REMEMBERED_CREDENTIALS = 'rememberedCredentials';
+
+async function getRememberedCredentials(): Promise<{ email: string; password?: string } | null> {
+  const data = await browser.storage.local.get([STORAGE_REMEMBERED_CREDENTIALS]);
+  const creds = data[STORAGE_REMEMBERED_CREDENTIALS] as { email?: string } | null;
+  if (!creds || typeof creds !== 'object') return null;
+  return {
+    email: String(creds.email || ''),
+    password: undefined,
+  };
+}
 
 async function saveRememberedCredentials(email: string, _password: string, remember: boolean): Promise<void> {
   if (remember) {
@@ -1199,12 +1206,6 @@ async function saveRememberedCredentials(email: string, _password: string, remem
   }
 }
 
-// 计算登录态过期时间：勾选“记住7天”则 7 天后过期，否则不设过期（长期保持直到手动登出）
-function computeAuthExpiry(remember: boolean): number | null {
-  return remember ? Date.now() + REMEMBER_DEVICE_DURATION_MS : null;
-}
-
-// 判断登录态是否已过期
 function isAuthExpired(auth: AuthData): boolean {
   return typeof auth.expiresAt === 'number' && Date.now() > auth.expiresAt;
 }
@@ -1216,14 +1217,19 @@ function isAuthExpiringSoon(auth: AuthData): boolean {
   return Date.now() + TOKEN_REFRESH_LEAD_MS > auth.expiresAt;
 }
 
-// 勾选/取消“在此设备记住7天”时，更新当前登录态的过期时间
+// 勾选/取消“在此设备记住7天”时，管理登录凭证的保存
+// expiresAt 使用 Supabase 返回的真实 JWT 过期时间，不在这里修改
 async function handleAuthSetRemember(remember: boolean): Promise<{ ok: boolean }> {
   const auth = await getAuthData();
   if (!auth?.accessToken) {
     return { ok: true };
   }
-  await setAuthData({ ...auth, expiresAt: computeAuthExpiry(Boolean(remember)) });
-  if (!remember) {
+  if (remember) {
+    const credentials = await getRememberedCredentials();
+    if (credentials?.email) {
+      await saveRememberedCredentials(credentials.email, credentials.password || '', true);
+    }
+  } else {
     await browser.storage.local.remove([STORAGE_REMEMBERED_CREDENTIALS]);
   }
   return { ok: true };
@@ -1300,7 +1306,7 @@ async function handleAuthLogin(email: string, password: string): Promise<AuthRes
     refreshToken: session.refresh_token,
     user: { email: newEmail, id: session.user?.id || '' },
     lastSyncAt: Date.now(),
-    expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
+    expiresAt: session.expires_at || null,
   });
   await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
@@ -1335,7 +1341,7 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
     refreshToken: session.refresh_token,
     user: { email: newEmail, id: session.user?.id || '' },
     lastSyncAt: Date.now(),
-    expiresAt: computeAuthExpiry(Boolean(settings.rememberDevice7Days)),
+    expiresAt: session.expires_at || null,
   });
   await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
