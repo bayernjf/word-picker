@@ -261,7 +261,7 @@ async function handleMessage(message: Message, sender?: browser.Runtime.MessageS
       }
       return handleAuthGetCredentials();
     case MESSAGE_TYPES.TRANSLATE:
-      return handleTranslate(message.word as string);
+      return handleTranslate(message.word as string, message.sourceLang as string | undefined);
     case MESSAGE_TYPES.IMAGE_OCR:
       return handleImageOcr(message.imageUrl as string);
     case MESSAGE_TYPES.PING:
@@ -1473,6 +1473,12 @@ async function handleImageOcr(imageUrl: string): Promise<{
     throw new Error('image_url_required');
   }
 
+  const settings = await getSettings();
+  const langMap: Record<string, string> = { en: 'eng', fr: 'fra', es: 'spa', ja: 'jpn' };
+  const ocrLanguages = (settings.recognizeLanguages || ['en'])
+    .map(code => langMap[code] || 'eng')
+    .filter((v, i, a) => a.indexOf(v) === i);
+
   let imageData: string;
   if (imageUrl.startsWith('data:')) {
     imageData = imageUrl;
@@ -1489,7 +1495,7 @@ async function handleImageOcr(imageUrl: string): Promise<{
 
   const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
     chrome.runtime.sendMessage(
-      { type: 'OCR_PROCESS', id: crypto.randomUUID?.() || String(Date.now()), imageData },
+      { type: 'OCR_PROCESS', id: crypto.randomUUID?.() || String(Date.now()), imageData, languages: ocrLanguages },
       (resp) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
@@ -1520,11 +1526,12 @@ function blobToBase64(blob: Blob): Promise<string> {
   });
 }
 
-async function handleTranslate(word: string): Promise<{ translation: TranslationResult | OfflineTranslationResult; fromCache?: boolean; fromOffline?: boolean }> {
+async function handleTranslate(word: string, sourceLang?: string): Promise<{ translation: TranslationResult | OfflineTranslationResult; fromCache?: boolean; fromOffline?: boolean }> {
   if (!word || !word.trim()) {
     throw new Error('待翻译单词不能为空');
   }
   const settings = await getSettings();
+  const lang = sourceLang || 'en';
 
   // 1. 先查缓存，命中直接返回（0 网络，秒回）
   const cached = await getCachedTranslation(word);
@@ -1552,7 +1559,7 @@ async function handleTranslate(word: string): Promise<{ translation: Translation
   }
 
   // 3. 仍未命中才走网络翻译（生僻词/词组兜底）
-  const translation = await translateWord(word, settings);
+  const translation = await translateWord(word, settings, lang);
 
   // 4. 写回缓存（仅缓存有效结果，兜底结果不缓存以便后续重试）
   if (translation && translation.provider !== 'fallback') {

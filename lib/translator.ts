@@ -56,20 +56,20 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   ]);
 }
 
-export async function translateWord(word: string, settings: Settings): Promise<TranslationResult> {
+export async function translateWord(word: string, settings: Settings, sourceLang: string = "en"): Promise<TranslationResult> {
   const normalizedWord = String(word || "").trim();
   if (!normalizedWord) {
     throw new Error("待翻译单词不能为空");
   }
 
   const provider = settings.translator || "free";
-  logger.debug('translateWord', { word: normalizedWord, provider, useYoudao: settings.useYoudaoDict });
+  logger.debug('translateWord', { word: normalizedWord, provider, useYoudao: settings.useYoudaoDict, sourceLang });
   if (provider === "fallback") {
     return buildFallbackTranslation(normalizedWord);
   }
 
   const useYoudao = settings.useYoudaoDict !== false;
-  const result = await translateWithFreeApis(normalizedWord, useYoudao);
+  const result = await translateWithFreeApis(normalizedWord, useYoudao, sourceLang);
   logger.info('translateWord success', { word: normalizedWord, provider: result.provider });
   return result;
 }
@@ -120,20 +120,21 @@ function releaseTranslateSlot(): void {
   }
 }
 
-async function translateWithFreeApis(word: string, useYoudao: boolean = true): Promise<TranslationResult> {
+async function translateWithFreeApis(word: string, useYoudao: boolean = true, sourceLang: string = "en"): Promise<TranslationResult> {
   await acquireTranslateSlot();
   try {
-    return await doTranslateWithFreeApis(word, useYoudao);
+    return await doTranslateWithFreeApis(word, useYoudao, sourceLang);
   } finally {
     releaseTranslateSlot();
   }
 }
 
-async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true): Promise<TranslationResult> {
+async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true, sourceLang: string = "en"): Promise<TranslationResult> {
   const fallback = buildFallbackTranslation(word);
+  const isEnglish = sourceLang === "en";
   const [translationResult, dictionaryResult, youdaoResult] = await Promise.allSettled([
-    withTimeout(fetchFreeTranslation(word), 2500),
-    withTimeout(fetchDictionaryEntry(word), 2500),
+    withTimeout(fetchFreeTranslation(word, sourceLang), 2500),
+    isEnglish ? withTimeout(fetchDictionaryEntry(word), 2500) : Promise.resolve(null),
     useYoudao ? withTimeout(fetchYoudaoDict(word), 2500) : Promise.resolve(null),
   ]);
 
@@ -170,11 +171,11 @@ async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true):
   };
 }
 
-async function fetchFreeTranslation(text: string): Promise<string> {
+async function fetchFreeTranslation(text: string, sourceLang: string = "en"): Promise<string> {
   const url = new URL(MEMORY_TRANSLATE_ENDPOINT);
   url.search = new URLSearchParams({
     q: text,
-    langpair: "en|zh-CN",
+    langpair: `${sourceLang}|zh-CN`,
   }).toString();
 
   const response = await fetch(url.toString());

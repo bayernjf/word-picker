@@ -48,26 +48,37 @@ interface OcrMessage {
   type: string;
   id?: string;
   imageData?: string;
+  languages?: string[];
 }
 
 let worker: TesseractWorker | null = null;
 let workerReady = false;
 let workerPromise: Promise<TesseractWorker> | null = null;
+let currentWorkerLang = '';
 
-function getWorker(): Promise<TesseractWorker> {
-  if (worker && workerReady) {
+function getWorker(languages: string[] = ['eng']): Promise<TesseractWorker> {
+  const langStr = languages.join('+');
+  if (worker && workerReady && currentWorkerLang === langStr) {
     return Promise.resolve(worker);
   }
-  if (workerPromise) {
+  if (workerPromise && currentWorkerLang === langStr) {
     return workerPromise;
   }
 
+  if (worker) {
+    worker.terminate().catch(() => {});
+    worker = null;
+    workerReady = false;
+    workerPromise = null;
+  }
+
   workerPromise = (async () => {
-    const w = await Tesseract.createWorker('eng', 1, {
+    const w = await Tesseract.createWorker(langStr, 1, {
       langPath: 'https://tessdata.projectnaptha.com/4.0.0',
     });
     worker = w;
     workerReady = true;
+    currentWorkerLang = langStr;
     workerPromise = null;
     return w;
   })();
@@ -75,12 +86,12 @@ function getWorker(): Promise<TesseractWorker> {
   return workerPromise;
 }
 
-async function processOcr(imageData: string): Promise<{
+async function processOcr(imageData: string, languages: string[] = ['eng']): Promise<{
   words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
   imageWidth: number;
   imageHeight: number;
 }> {
-  const w = await getWorker();
+  const w = await getWorker(languages);
   const result = await w.recognize(imageData);
 
   const words = (result.data.words || [])
@@ -121,13 +132,14 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender: unknown, sendRe
 
   const id = msg.id || '';
   const imageData = msg.imageData || '';
+  const languages = msg.languages || ['eng'];
 
   if (!imageData) {
     sendResponse({ id, error: 'no_image_data' });
     return false;
   }
 
-  processOcr(imageData)
+  processOcr(imageData, languages)
     .then((result) => {
       sendResponse({ id, ...result });
     })
