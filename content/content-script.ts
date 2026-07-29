@@ -27,6 +27,8 @@ function getFireworksAPI(): FireworksAPI {
     PEN: "pen",
     LOADING: "loading",
     SHOWING: "showing",
+    OCR_LOADING: "ocr_loading",
+    IMAGE_OVERLAY: "image_overlay",
   } as const;
 
   type State = typeof STATE[keyof typeof STATE];
@@ -97,6 +99,10 @@ function getFireworksAPI(): FireworksAPI {
   let isClosingPopup = false;
   let pendingPopupFocus = false;
   let wordHighlight: Highlight | null = null;
+
+  let imageOverlayHost: HTMLDivElement | null = null;
+  let currentImageElement: HTMLImageElement | null = null;
+  let ocrRequestToken = 0;
 
   const KEYDOWN_POPUP_DELAY_MS = 100;
   const VIEWPORT_CHANGE_THROTTLE_MS = 100;
@@ -254,7 +260,7 @@ function getFireworksAPI(): FireworksAPI {
   }
 
   function handleKeyDown(event: KeyboardEvent): void {
-    if (event.key === "Escape" && popupContainer) {
+    if (event.key === "Escape" && (popupContainer || imageOverlayHost)) {
       event.preventDefault();
       closePopupAndReset();
       return;
@@ -338,6 +344,10 @@ function getFireworksAPI(): FireworksAPI {
     clearKeydownPopupTimer();
     removeCursor();
     clearWordHighlight();
+    if (currentState === STATE.OCR_LOADING || currentState === STATE.IMAGE_OVERLAY) {
+      clearImageOverlay();
+      currentState = preservePopup && popupContainer?.isConnected ? STATE.SHOWING : STATE.IDLE;
+    }
     if (preservePopup && popupContainer?.isConnected) {
       currentState = currentState === STATE.LOADING ? STATE.LOADING : STATE.SHOWING;
       positionPopup(popupContainer, activeAnchor.x, activeAnchor.y);
@@ -367,6 +377,7 @@ function getFireworksAPI(): FireworksAPI {
     clearHoverTimer();
     clearKeydownPopupTimer();
     latestRequestToken += 1;
+    ocrRequestToken += 1;
     lookupKeyPressed = false;
     pendingPopupFocus = false;
     hidePopup();
@@ -374,6 +385,7 @@ function getFireworksAPI(): FireworksAPI {
     currentState = STATE.IDLE;
     removeCursor();
     clearWordHighlight();
+    clearImageOverlay();
     isClosingPopup = false;
   }
 
@@ -415,6 +427,14 @@ function getFireworksAPI(): FireworksAPI {
   }
 
   function handleViewportChange(): void {
+    if (imageOverlayHost && currentImageElement) {
+      const rect = currentImageElement.getBoundingClientRect();
+      imageOverlayHost.style.left = `${rect.left}px`;
+      imageOverlayHost.style.top = `${rect.top}px`;
+      imageOverlayHost.style.width = `${rect.width}px`;
+      imageOverlayHost.style.height = `${rect.height}px`;
+    }
+
     if (!popupContainer || isPopupPinned()) {
       return;
     }
@@ -463,6 +483,31 @@ function getFireworksAPI(): FireworksAPI {
 
     if (!lookupKeyPressed) {
       return;
+    }
+
+    if (currentState === STATE.IMAGE_OVERLAY) {
+      return;
+    }
+
+    const imageDetection = detectImageAtPoint(event.clientX, event.clientY);
+    if (imageDetection) {
+      clearWordHighlight();
+
+      if (currentState === STATE.OCR_LOADING && currentImageElement === imageDetection.element) {
+        return;
+      }
+
+      clearHoverTimer();
+      const delay = Math.max(0, Number(settings.hoverDelay) || DEFAULT_SETTINGS.hoverDelay);
+      hoverTimer = window.setTimeout(() => {
+        void performImageOcr(imageDetection);
+      }, delay);
+      return;
+    }
+
+    if (currentState === STATE.OCR_LOADING) {
+      clearImageOverlay();
+      currentState = STATE.PEN;
     }
 
     // 即时高亮鼠标指向的单词（独立于弹窗的 hoverDelay，体验更跟手）
@@ -692,6 +737,200 @@ function getFireworksAPI(): FireworksAPI {
     }
 
     return detection.text.slice(start, end).trim().replace(/\s+/g, " ");
+  }
+
+  interface ImageDetection {
+    element: HTMLImageElement;
+    rect: DOMRect;
+    src: string;
+  }
+
+  function detectImageAtPoint(x: number, y: number): ImageDetection | null {
+    const element = document.elementFromPoint(x, y);
+    if (!element) return null;
+    if (popupHost && (element === popupHost || popupHost.contains(element))) return null;
+    if (imageOverlayHost && (element === imageOverlayHost || imageOverlayHost.contains(element))) return null;
+
+    const img = element.closest('img') as HTMLImageElement | null;
+    if (!img || !img.src) return null;
+    if (img.naturalWidth === 0 || img.naturalHeight === 0) return null;
+
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 50 || rect.height < 30) return null;
+
+    return { element: img, rect, src: img.src };
+  }
+
+  async function performImageOcr(detection: ImageDetection): Promise<void> {
+    const token = ++ocrRequestToken;
+    currentImageElement = detection.element;
+    currentState = STATE.OCR_LOADING;
+
+    showPopup(detection.rect.left + detection.rect.width / 2, detection.rect.top + 20, {
+      word: "图片识别",
+      phonetic: "",
+      meaning: "正在识别图片中的文字...",
+      exampleEn: "",
+      exampleZh: "",
+    });
+
+    try {
+      const response = await sendMessage({
+        type: "IMAGE_OCR",
+        imageUrl: detection.src,
+      });
+
+      if (token !== ocrRequestToken) return;
+
+      const ocrResult = response.ocrResult as {
+        words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
+        imageWidth: number;
+        imageHeight: number;
+      } | undefined;
+
+      if (!ocrResult || !ocrResult.words || ocrResult.words.length === 0) {
+        updatePopup({
+          word: "图片识别",
+          phonetic: "",
+          meaning: "未识别到图片中的文字",
+          exampleEn: "",
+          exampleZh: "",
+          error: true,
+        });
+        currentState = STATE.SHOWING;
+        return;
+      }
+
+      currentState = STATE.IMAGE_OVERLAY;
+      hidePopup();
+      showImageOverlay(detection, ocrResult);
+    } catch (error) {
+      if (token !== ocrRequestToken) return;
+      updatePopup({
+        word: "图片识别",
+        phonetic: "",
+        meaning: error instanceof Error ? error.message : "图片识别失败",
+        exampleEn: "",
+        exampleZh: "",
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+    }
+  }
+
+  function showImageOverlay(
+    detection: ImageDetection,
+    ocrResult: { words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>; imageWidth: number; imageHeight: number }
+  ): void {
+    clearImageOverlay();
+
+    const imgRect = detection.rect;
+    const scaleX = imgRect.width / ocrResult.imageWidth;
+    const scaleY = imgRect.height / ocrResult.imageHeight;
+
+    imageOverlayHost = document.createElement("div");
+    imageOverlayHost.id = "word-picker-image-overlay";
+    imageOverlayHost.style.position = "fixed";
+    imageOverlayHost.style.left = `${imgRect.left}px`;
+    imageOverlayHost.style.top = `${imgRect.top}px`;
+    imageOverlayHost.style.width = `${imgRect.width}px`;
+    imageOverlayHost.style.height = `${imgRect.height}px`;
+    imageOverlayHost.style.zIndex = "2147483646";
+    imageOverlayHost.style.pointerEvents = "auto";
+
+    for (const word of ocrResult.words) {
+      if (!word.text || !word.text.trim()) continue;
+      const cleanText = word.text.trim();
+      if (!/[A-Za-z]/.test(cleanText)) continue;
+
+      const hotspot = document.createElement("div");
+      hotspot.className = "wp-ocr-hotspot";
+      hotspot.style.position = "absolute";
+      hotspot.style.left = `${word.bbox.x0 * scaleX}px`;
+      hotspot.style.top = `${word.bbox.y0 * scaleY}px`;
+      hotspot.style.width = `${(word.bbox.x1 - word.bbox.x0) * scaleX}px`;
+      hotspot.style.height = `${(word.bbox.y1 - word.bbox.y0) * scaleY}px`;
+      hotspot.style.pointerEvents = "auto";
+      hotspot.style.cursor = "pointer";
+      hotspot.title = cleanText;
+
+      hotspot.addEventListener("mouseenter", () => {
+        hotspot.style.background = "rgba(137, 180, 250, 0.45)";
+        hotspot.style.color = "#fff";
+        hotspot.style.textShadow = "0 0 2px rgba(0,0,0,0.6)";
+        hotspot.textContent = cleanText;
+        hotspot.style.fontSize = `${Math.max(10, Math.min(16, (word.bbox.y1 - word.bbox.y0) * scaleY * 0.7))}px`;
+        hotspot.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        hotspot.style.display = "flex";
+        hotspot.style.alignItems = "center";
+        hotspot.style.justifyContent = "center";
+        hotspot.style.overflow = "hidden";
+        hotspot.style.borderRadius = "2px";
+        hotspot.style.fontWeight = "600";
+      });
+
+      hotspot.addEventListener("mouseleave", () => {
+        hotspot.style.background = "transparent";
+        hotspot.style.color = "transparent";
+        hotspot.textContent = "";
+      });
+
+      hotspot.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const rect = hotspot.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        triggerWordLookup(cleanText, cx, cy);
+      });
+
+      imageOverlayHost.appendChild(hotspot);
+    }
+
+    document.documentElement.appendChild(imageOverlayHost);
+  }
+
+  function clearImageOverlay(): void {
+    if (imageOverlayHost) {
+      imageOverlayHost.remove();
+      imageOverlayHost = null;
+    }
+    currentImageElement = null;
+  }
+
+  async function triggerWordLookup(word: string, x: number, y: number): Promise<void> {
+    currentState = STATE.LOADING;
+    showPopup(x, y, buildLoadingData(word));
+
+    const requestToken = ++latestRequestToken;
+    try {
+      const response = await sendMessage({ type: "TRANSLATE", word });
+      if (requestToken !== latestRequestToken) return;
+
+      const translation = (response.translation as TranslationData) || buildLoadingData(word);
+      currentLookup = {
+        word,
+        node: document.createTextNode(word),
+        text: word,
+        start: 0,
+        end: word.length,
+        offset: 0,
+        signature: `${word}|0|${word.length}|${word}`,
+        translation,
+      };
+      updatePopup(translation);
+      currentState = STATE.SHOWING;
+    } catch (error) {
+      if (requestToken !== latestRequestToken) return;
+      updatePopup({
+        word,
+        phonetic: "",
+        meaning: error instanceof Error ? error.message : "翻译失败",
+        exampleEn: "",
+        exampleZh: "",
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+    }
   }
 
   function buildLoadingData(word: string): TranslationData {
