@@ -11,7 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { copyStaticAssets, copyPolyfill } from "./copy-static.js";
+import { copyStaticAssets, copyPolyfill, copyTesseractAssets } from "./copy-static.js";
 
 const ROOT = process.cwd();
 const SRC = path.join(ROOT, "dist", "extension");
@@ -284,6 +284,9 @@ function main(): void {
 
   // Copy browser polyfill for content scripts
   copyPolyfill();
+
+  // Copy Tesseract.js assets for OCR
+  copyTesseractAssets();
 
   const target = process.argv[2] || "all";
 

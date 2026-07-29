@@ -13,6 +13,7 @@ const STATIC_FILES = [
   'popup/popup.html',
   'popup/popup.css',
   'options/options.html',
+  'offscreen/ocr.html',
 ];
 
 const STATIC_DIRS = ['assets'];
@@ -54,8 +55,26 @@ export function copyPolyfill(): void {
   console.log('[copy-static] browser-polyfill.js → content/');
 }
 
+export function copyTesseractAssets(): void {
+  const tesseractDist = path.join(ROOT, 'node_modules', 'tesseract.js', 'dist');
+  const dest = path.join(DIST, 'assets', 'tesseract');
+  fs.mkdirSync(dest, { recursive: true });
+
+  const files = ['tesseract.min.js', 'worker.min.js'];
+  for (const file of files) {
+    const src = path.join(tesseractDist, file);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, path.join(dest, file));
+      console.log(`[copy-static] tesseract/${file}`);
+    } else {
+      console.warn(`[copy-static] Missing tesseract asset: ${file}`);
+    }
+  }
+}
+
 // 直接运行（非被导入时）
 const isMainModule = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/^\.[/\\]/, ''));
 if (isMainModule) {
   copyStaticAssets();
+  copyTesseractAssets();
 }
