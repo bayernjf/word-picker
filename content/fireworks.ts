@@ -29,6 +29,142 @@
         transform: translate(var(--ex), var(--ey)) scale(0.3);
       }
     }
+
+    .fw-confetti {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 8px;
+      height: 12px;
+      margin-left: -4px;
+      margin-top: -6px;
+      background: var(--color);
+      animation: fw-confetti-fall 1200ms cubic-bezier(0.15, 0.6, 0.35, 1) forwards;
+      pointer-events: none;
+      will-change: transform, opacity;
+    }
+
+    @keyframes fw-confetti-fall {
+      0% {
+        opacity: 1;
+        transform: translate(var(--sx), var(--sy)) rotate(0deg);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(var(--ex), var(--ey)) rotate(var(--rot));
+      }
+    }
+
+    .fw-sparkle {
+      position: fixed;
+      left: 0;
+      top: 0;
+      width: 10px;
+      height: 10px;
+      margin-left: -5px;
+      margin-top: -5px;
+      background: var(--color);
+      clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%);
+      animation: fw-sparkle-pop 800ms ease-out forwards;
+      pointer-events: none;
+      will-change: transform, opacity;
+    }
+
+    @keyframes fw-sparkle-pop {
+      0% {
+        opacity: 1;
+        transform: translate(var(--sx), var(--sy)) scale(0) rotate(0deg);
+      }
+      50% {
+        opacity: 1;
+        transform: translate(var(--mx), var(--my)) scale(1.5) rotate(90deg);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(var(--ex), var(--ey)) scale(0.3) rotate(180deg);
+      }
+    }
+
+    .fw-ripple {
+      position: fixed;
+      left: var(--cx);
+      top: var(--cy);
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      border: 3px solid var(--color);
+      transform: translate(-50%, -50%);
+      animation: fw-ripple-expand var(--duration) ease-out forwards;
+      pointer-events: none;
+      will-change: width, height, opacity;
+    }
+
+    @keyframes fw-ripple-expand {
+      0% {
+        width: 0;
+        height: 0;
+        opacity: 1;
+        border-width: 3px;
+      }
+      100% {
+        width: var(--size);
+        height: var(--size);
+        opacity: 0;
+        border-width: 1px;
+      }
+    }
+
+    .fw-emoji {
+      position: fixed;
+      left: 0;
+      top: 0;
+      font-size: 24px;
+      line-height: 1;
+      animation: fw-emoji-float 1200ms ease-out forwards;
+      pointer-events: none;
+      will-change: transform, opacity;
+    }
+
+    @keyframes fw-emoji-float {
+      0% {
+        opacity: 1;
+        transform: translate(var(--sx), var(--sy)) scale(0.5);
+      }
+      50% {
+        opacity: 1;
+        transform: translate(var(--mx), var(--my)) scale(1.2);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(var(--ex), var(--ey)) scale(0.6);
+      }
+    }
+
+    .fw-heart {
+      position: fixed;
+      left: 0;
+      top: 0;
+      font-size: 20px;
+      line-height: 1;
+      animation: fw-heart-rise 1100ms ease-out forwards;
+      pointer-events: none;
+      will-change: transform, opacity;
+    }
+
+    @keyframes fw-heart-rise {
+      0% {
+        opacity: 1;
+        transform: translate(var(--sx), var(--sy)) scale(0.5);
+      }
+      50% {
+        opacity: 1;
+        transform: translate(var(--mx), var(--my)) scale(1.3);
+      }
+      100% {
+        opacity: 0;
+        transform: translate(var(--ex), var(--ey)) scale(0.4);
+      }
+    }
   `;
 
   const FIREWORKS_PALETTE = ["#f38ba8", "#fab387", "#f9e2af", "#a6e3a1", "#94e2d5", "#89b4fa", "#cba6f7", "#f5c2e7"];
@@ -205,13 +341,146 @@
       fireworksCanvas = null;
     }
     if (fireworksShadow) {
-      fireworksShadow.querySelectorAll(".fw-particle").forEach((node) => node.remove());
+      fireworksShadow.querySelectorAll(".fw-particle, .fw-confetti, .fw-sparkle, .fw-ripple, .fw-emoji, .fw-heart").forEach((node) => node.remove());
     }
     if (fireworksHost) {
       fireworksHost.remove();
       fireworksHost = null;
       fireworksShadow = null;
     }
+  }
+
+  function launchConfetti(x: number, y: number): void {
+    const shadow = ensureFireworksHost();
+    if (!shadow) return;
+
+    const COUNT = 40;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < COUNT; i++) {
+      const el = document.createElement("span");
+      el.className = "fw-confetti";
+      const angle = (Math.PI * 2 * i) / COUNT + (Math.random() - 0.5) * 0.8;
+      const distance = 50 + Math.random() * 120;
+      const dx = Math.cos(angle) * distance;
+      const dy = Math.sin(angle) * distance + 60 + Math.random() * 40;
+      const rot = (Math.random() * 720 - 360).toFixed(0);
+      el.style.setProperty("--sx", `${x}px`);
+      el.style.setProperty("--sy", `${y}px`);
+      el.style.setProperty("--ex", `${x + dx}px`);
+      el.style.setProperty("--ey", `${y + dy}px`);
+      el.style.setProperty("--rot", `${rot}deg`);
+      el.style.setProperty("--color", pickColor());
+      el.style.animationDuration = `${900 + Math.random() * 600}ms`;
+      el.addEventListener("animationend", () => el.remove(), { once: true });
+      frag.appendChild(el);
+    }
+    shadow.appendChild(frag);
+  }
+
+  function launchSparkle(x: number, y: number): void {
+    const shadow = ensureFireworksHost();
+    if (!shadow) return;
+
+    const COUNT = 24;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < COUNT; i++) {
+      const el = document.createElement("span");
+      el.className = "fw-sparkle";
+      const angle = (Math.PI * 2 * i) / COUNT + (Math.random() - 0.5) * 0.5;
+      const dist = 30 + Math.random() * 60;
+      const midDist = dist * 0.6;
+      const endDist = dist * 1.2;
+      el.style.setProperty("--sx", `${x}px`);
+      el.style.setProperty("--sy", `${y}px`);
+      el.style.setProperty("--mx", `${x + Math.cos(angle) * midDist}px`);
+      el.style.setProperty("--my", `${y + Math.sin(angle) * midDist}px`);
+      el.style.setProperty("--ex", `${x + Math.cos(angle) * endDist}px`);
+      el.style.setProperty("--ey", `${y + Math.sin(angle) * endDist}px`);
+      el.style.setProperty("--color", pickColor());
+      el.style.animationDuration = `${600 + Math.random() * 400}ms`;
+      el.style.animationDelay = `${Math.random() * 150}ms`;
+      el.addEventListener("animationend", () => el.remove(), { once: true });
+      frag.appendChild(el);
+    }
+    shadow.appendChild(frag);
+  }
+
+  function launchRipple(x: number, y: number): void {
+    const shadow = ensureFireworksHost();
+    if (!shadow) return;
+
+    const RING_COUNT = 4;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < RING_COUNT; i++) {
+      const el = document.createElement("span");
+      el.className = "fw-ripple";
+      const size = 80 + i * 60;
+      el.style.setProperty("--cx", `${x}px`);
+      el.style.setProperty("--cy", `${y}px`);
+      el.style.setProperty("--size", `${size}px`);
+      el.style.setProperty("--color", pickColor());
+      el.style.setProperty("--duration", `${600 + i * 200}ms`);
+      el.style.animationDelay = `${i * 120}ms`;
+      el.addEventListener("animationend", () => el.remove(), { once: true });
+      frag.appendChild(el);
+    }
+    shadow.appendChild(frag);
+  }
+
+  function launchEmoji(x: number, y: number): void {
+    const shadow = ensureFireworksHost();
+    if (!shadow) return;
+
+    const EMOJIS = ["\u{1F389}", "\u{1F31F}", "\u{2728}", "\u{1F4AB}", "\u{1F388}", "\u{1F49E}", "\u{1F38A}"];
+    const COUNT = 16;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < COUNT; i++) {
+      const el = document.createElement("span");
+      el.className = "fw-emoji";
+      el.textContent = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+      const angle = (Math.PI * 2 * i) / COUNT + (Math.random() - 0.5) * 0.6;
+      const dist = 40 + Math.random() * 80;
+      const midDist = dist * 0.5;
+      const endDist = dist * 1.3;
+      el.style.setProperty("--sx", `${x}px`);
+      el.style.setProperty("--sy", `${y}px`);
+      el.style.setProperty("--mx", `${x + Math.cos(angle) * midDist}px`);
+      el.style.setProperty("--my", `${y + Math.sin(angle) * midDist - 30}px`);
+      el.style.setProperty("--ex", `${x + Math.cos(angle) * endDist}px`);
+      el.style.setProperty("--ey", `${y + Math.sin(angle) * endDist + 20}px`);
+      el.style.animationDuration = `${900 + Math.random() * 500}ms`;
+      el.style.animationDelay = `${Math.random() * 200}ms`;
+      el.addEventListener("animationend", () => el.remove(), { once: true });
+      frag.appendChild(el);
+    }
+    shadow.appendChild(frag);
+  }
+
+  function launchHearts(x: number, y: number): void {
+    const shadow = ensureFireworksHost();
+    if (!shadow) return;
+
+    const HEARTS = ["\u{2764}\u{FE0F}", "\u{1F496}", "\u{1F497}", "\u{1F498}", "\u{1F49D}", "\u{1F496}"];
+    const COUNT = 14;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < COUNT; i++) {
+      const el = document.createElement("span");
+      el.className = "fw-heart";
+      el.textContent = HEARTS[Math.floor(Math.random() * HEARTS.length)];
+      const dist = 50 + Math.random() * 80;
+      const drift = (Math.random() - 0.5) * 60;
+      el.style.setProperty("--sx", `${x}px`);
+      el.style.setProperty("--sy", `${y}px`);
+      el.style.setProperty("--mx", `${x + drift}px`);
+      el.style.setProperty("--my", `${y - dist * 0.5}px`);
+      el.style.setProperty("--ex", `${x + drift * 1.5}px`);
+      el.style.setProperty("--ey", `${y - dist}px`);
+      el.style.animationDuration = `${800 + Math.random() * 500}ms`;
+      el.style.animationDelay = `${Math.random() * 250}ms`;
+      el.addEventListener("animationend", () => el.remove(), { once: true });
+      frag.appendChild(el);
+    }
+    shadow.appendChild(frag);
   }
 
   function launchFireworks(effectMode: string, x: number, y: number): void {
@@ -223,6 +492,26 @@
     }
     if (effectMode === "canvas") {
       launchCanvasFireworks(x, y);
+      return;
+    }
+    if (effectMode === "confetti") {
+      launchConfetti(x, y);
+      return;
+    }
+    if (effectMode === "sparkle") {
+      launchSparkle(x, y);
+      return;
+    }
+    if (effectMode === "ripple") {
+      launchRipple(x, y);
+      return;
+    }
+    if (effectMode === "emoji") {
+      launchEmoji(x, y);
+      return;
+    }
+    if (effectMode === "hearts") {
+      launchHearts(x, y);
       return;
     }
     launchCssFireworks(x, y);
