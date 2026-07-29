@@ -60,6 +60,7 @@ export interface Settings {
   rememberDevice7Days: boolean;
   fireworksEffect: "canvas" | "css" | "none";
   logLevel: "debug" | "info" | "warn" | "error";
+  recognizeLanguages: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -76,6 +77,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rememberDevice7Days: false,
   fireworksEffect: "canvas",
   logLevel: "warn",
+  recognizeLanguages: ["en"],
 };
 
 const STORAGE_KEYS = {
