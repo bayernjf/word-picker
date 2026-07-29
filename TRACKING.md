@@ -71,3 +71,89 @@
 - [x] 设置项云端同步（后端 API + 客户端推拉逻辑 + 触发时机）
 - [x] OCR 调优（置信度阈值、多语言字符过滤、30s 超时）
 - [x] 日语分词 + 来源语言标注（[英]/[法]/[西]/[日]）
+- [x] 德语支持（Latin 字母 + 变音符号，OCR/正则/翻译全链路）
+- [x] 韩语支持（Hangul 字符检测 + 空格分词 + OCR/翻译全链路）
+
+---
+
+## 代码审计报告（2026-07-30）
+
+### 基础检查
+
+| 检查项 | 结果 |
+|--------|------|
+| tsc 类型检查 | 0 错误 |
+| ESLint | 0 错误 |
+| Vitest 单测 | 62/62 通过 |
+| Chrome 构建 | 成功 |
+
+### 代码规模
+
+| 文件 | 行数 | 职责 |
+|------|------|------|
+| content/content-script.ts | 1965 | 查词主逻辑、弹窗渲染、OCR 热区 |
+| service/service-worker.ts | 1647 | 消息路由、同步队列、认证、OCR 调度 |
+| lib/storage.ts | 593 | 存储封装、数据迁移、缓存管理 |
+| options/options.ts | 417 | 设置页交互 |
+| lib/translator.ts | 410 | 翻译 API 调用 |
+| popup/popup.ts | 319 | 单词本弹窗 |
+| lib/offlineDict.ts | 278 | 离线词库（IndexedDB） |
+| lib/utils.ts | 194 | 工具函数 |
+| lib/cache.ts | 171 | LRU 翻译缓存 |
+| lib/supabase.ts | 170 | Supabase Auth 调用 |
+| content/shared.ts | 130 | 共享 API（escapeHtml/sendMessage/logger） |
+| content/fireworks.ts | 237 | 烟花特效（canvas/css） |
+| **合计** | **~6500** | |
+
+### 发现的问题
+
+#### MEDIUM: Word 缺少 sourceLang 字段
+- 单词保存时不记录来源语言，所有语言混在同一单词本
+- 弹窗里的 `[英]/[法]/[한]` 标签仅在查词时显示，不持久化
+- 无法按语言筛选或导出单词
+- **建议**：后续给 Word 接口加 `sourceLang` 字段，保存时记录
+
+#### MEDIUM: handleSaveWord 未登录时直接报错
+- `syncEnabled` 为 true 但未登录时，抛异常「请先登录才能添加单词」
+- 用户可能只是想本地使用，不想登录
+- **建议**：未登录时允许本地保存，跳过同步即可
+
+#### LOW: content-script.ts 重复定义 lib/ 中的类型和常量
+- Settings、LookupKey、Platform、LANGUAGE_WORD_PATTERNS 等在 content-script.ts 有独立副本
+- 这是设计如此（content script 运行在隔离世界，无法 import lib/），但增加维护成本
+- 添加新语言时必须同时更新 constants.ts 和 content-script.ts
+- **建议**：可接受，暂无更好方案
+
+#### LOW: clearUserData 重复删除同一 storage key
+- `service-worker.ts` L1348-1361 同时删除字符串字面量 `'syncQueue'` 和常量 `STORAGE_SYNC_QUEUE`，两者值相同
+- 不影响功能，只是冗余代码
+
+#### LOW: lowercaseFirstLetter 仅处理纯英文单词
+- 正则 `/^[A-Za-z][A-Za-z'-]*$/` 只匹配纯英文，法语/德语/西班牙语单词不会被规范化
+- 可能导致 "Bonjour" 和 "bonjour" 被视为不同单词
+- **建议**：后续可扩展为非英文 Latin 字母的首字母小写
+
+#### LOW: saveRememberedCredentials 的 password 参数传入但未存储
+- 函数签名接收 `_password` 但函数体只存储 email，密码未持久化
+- 调用方 `handleAuthLogin` / `handleAuthRegister` 传入了明文 password 但无实际效果
+- 可以清理函数签名，去掉 password 参数
+
+#### LOW: handleAuthLogout 重复清理 storage
+- `clearUserData()` 已删除 `STORAGE_AUTH`、`STORAGE_CURRENT_USER_EMAIL`、`STORAGE_DEVICE_ID` 等
+- 之后又单独调用 `browser.storage.local.remove(['deviceId'])`，完全冗余
+- `setAuthData(null)` + `setCurrentUserEmail(null)` 也在 `clearUserData()` 中做过
+
+#### LOW: pushWords 中 book_id 长度校验使用魔法数字
+- `bookId.length < 10` 和 `mapped.book_id.length <= 20` 是硬编码阈值
+- 用于过滤本地生成的临时 bookId（如 `local_default_book`），但 UUID 是 36 字符
+- 如果服务端 book ID 格式变化，可能误过滤
+
+### 架构评价
+
+- 同步机制健壮：队列持久化 + 指数退避重试 + 锁机制 + token 自动刷新
+- 翻译链路三层降级：缓存 → 离线词库 → 网络 API，体验流畅
+- 多语言扩展性好：添加 Latin 系语言只需改配置，无需修改核心逻辑
+- 安全性好：无 service role key 泄露风险，CSV 导出有公式注入防护
+- popup/options 代码清晰：escapeHtml 使用正确，无 XSS 风险
+- fireworks.ts 使用 Shadow DOM 隔离样式，尊重 prefers-reduced-motion
+- supabase.ts 简洁，readEnv 兼容 process.env 和 import.meta.env
