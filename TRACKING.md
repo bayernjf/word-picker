@@ -74,3 +74,6 @@
 - [x] 旧数据格式迁移（lookupKey → lookupKeys、错误 syncBaseUrl 清理）
 - [x] .env.example 模板完善
 - [x] 图片 OCR 取词基础实现（Tesseract.js + Offscreen Document + 单词热区叠加）
+- [x] 多语言识别配置（英/法/西 + 日语 TinySegmenter 分词）
+- [x] 翻译弹窗来源语言标注（[英]/[法]/[西]/[日]）
+- [x] 查词浮窗语言标签 + 快捷切换下拉菜单
