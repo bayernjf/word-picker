@@ -1548,7 +1548,7 @@ async function handleImageOcr(imageUrl: string): Promise<{
   }
 
   const settings = await getSettings();
-  const langMap: Record<string, string> = { en: 'eng', fr: 'fra', es: 'spa', de: 'deu', ja: 'jpn' };
+  const langMap: Record<string, string> = { en: 'eng', fr: 'fra', es: 'spa', de: 'deu', ko: 'kor', ja: 'jpn' };
   const ocrLanguages = (settings.recognizeLanguages || ['en'])
     .map(code => langMap[code] || 'eng')
     .filter((v, i, a) => a.indexOf(v) === i);
