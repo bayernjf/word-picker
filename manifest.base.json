@@ -20,7 +20,8 @@
   "host_permissions": [
     "https://api.dictionaryapi.dev/*",
     "https://api.mymemory.translated.net/*",
-    "https://dict.youdao.com/*"
+    "https://dict.youdao.com/*",
+    "https://en.wiktionary.org/*"
   ],
   "content_scripts": [
     {
