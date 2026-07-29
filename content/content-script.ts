@@ -1226,6 +1226,7 @@ function getFireworksAPI(): FireworksAPI {
         <button class="popup-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
+      <div class="popup-source-lang">${({ en: "[英]", fr: "[法]", es: "[西]", ja: "[日]" } as Record<string, string>)[currentLang] || ""}</div>
       <div class="popup-meaning ${data.error ? "is-error" : ""}">${escapeHtml(data.meaning || "")}</div>
       ${noteMarkup}
       ${exampleMarkup}
@@ -1816,6 +1817,12 @@ function getFireworksAPI(): FireworksAPI {
       color: #8b949e;
       margin-top: 4px;
       min-height: 19px;
+    }
+
+    .popup-source-lang {
+      font-size: 12px;
+      color: #8b949e;
+      margin-top: 2px;
     }
 
     .popup-meaning {
