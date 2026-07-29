@@ -170,12 +170,19 @@ browser.runtime.onStartup.addListener(() => {
   initializeOnAwake();
 });
 
+let settingsPushTimer: ReturnType<typeof setTimeout> | null = null;
+
 browser.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes.settings) return;
   const newSettings = changes.settings.newValue as Partial<Settings> | undefined;
   if (newSettings?.logLevel) {
     setLogLevel(newSettings.logLevel);
   }
+  if (settingsPushTimer) clearTimeout(settingsPushTimer);
+  settingsPushTimer = setTimeout(() => {
+    settingsPushTimer = null;
+    pushSettingsToServer().catch(() => {});
+  }, 2000);
 });
 
 browser.alarms.onAlarm.addListener(async (alarm) => {
@@ -264,6 +271,8 @@ async function handleMessage(message: Message, sender?: browser.Runtime.MessageS
       return handleTranslate(message.word as string, message.sourceLang as string | undefined);
     case MESSAGE_TYPES.IMAGE_OCR:
       return handleImageOcr(message.imageUrl as string);
+    case MESSAGE_TYPES.SYNC_SETTINGS:
+      return handleSyncSettings();
     case MESSAGE_TYPES.PING:
       return { pong: true };
     default:
@@ -545,7 +554,66 @@ function csvEscape(value: unknown): string {
 }
 
 async function handleSyncNow(): Promise<FlushResult> {
+  await pushSettingsToServer().catch(() => {});
+  await pullSettingsFromServer().catch(() => {});
   return flushSyncQueue(await getSettings(), true);
+}
+
+const SYNCABLE_SETTING_KEYS: (keyof Settings)[] = [
+  'lookupKeys', 'hoverDelay', 'translator', 'useYoudaoDict',
+  'autoSpeak', 'maxCacheSize', 'fireworksEffect', 'recognizeLanguages',
+];
+
+function extractSyncableSettings(settings: Settings): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of SYNCABLE_SETTING_KEYS) {
+    result[key] = settings[key];
+  }
+  return result;
+}
+
+async function pushSettingsToServer(): Promise<void> {
+  const auth = await getAuthData();
+  if (!auth?.accessToken || isAuthExpired(auth)) return;
+  const settings = await getSettings();
+  if (settings.syncEnabled === false) return;
+  const syncable = extractSyncableSettings(settings);
+  await fetchSyncJson(`${DEFAULT_SYNC_BASE_URL}/api/v1/settings`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${auth.accessToken}`,
+    },
+    body: JSON.stringify({ settings: syncable }),
+  });
+  logger.debug('[pushSettingsToServer] done');
+}
+
+async function pullSettingsFromServer(): Promise<void> {
+  const auth = await getAuthData();
+  if (!auth?.accessToken || isAuthExpired(auth)) return;
+  const settings = await getSettings();
+  if (settings.syncEnabled === false) return;
+  const result = await fetchSyncJson(`${DEFAULT_SYNC_BASE_URL}/api/v1/settings`, {
+    headers: { Authorization: `Bearer ${auth.accessToken}` },
+  }) as { settings: Record<string, unknown> | null; updatedAt?: string };
+  if (!result?.settings) return;
+  const patch: Record<string, unknown> = {};
+  for (const key of SYNCABLE_SETTING_KEYS) {
+    if (key in result.settings) {
+      patch[key] = result.settings[key];
+    }
+  }
+  if (Object.keys(patch).length > 0) {
+    await saveSettings(patch as Partial<Settings>);
+    logger.debug('[pullSettingsFromServer] merged', { keys: Object.keys(patch) });
+  }
+}
+
+async function handleSyncSettings(): Promise<{ ok: boolean }> {
+  await pushSettingsToServer();
+  await pullSettingsFromServer();
+  return { ok: true };
 }
 
 interface SyncStatusResult {
@@ -1328,6 +1396,9 @@ async function handleAuthLogin(email: string, password: string): Promise<AuthRes
   flushSyncQueue(settings, true).catch((err) => {
     logger.warn('[handleAuthLogin] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
   });
+  pullSettingsFromServer().catch((err) => {
+    logger.warn('[handleAuthLogin] pullSettingsFromServer failed', { error: err instanceof Error ? err.message : String(err) });
+  });
 
   return {
     ok: true,
@@ -1369,6 +1440,9 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
 
   flushSyncQueue(settings, true).catch((err) => {
     logger.warn('[handleAuthRegister] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
+  });
+  pushSettingsToServer().catch((err) => {
+    logger.warn('[handleAuthRegister] pushSettingsToServer failed', { error: err instanceof Error ? err.message : String(err) });
   });
 
   return {
@@ -1493,10 +1567,13 @@ async function handleImageOcr(imageUrl: string): Promise<{
 
   await ensureOffscreenDocument();
 
+  const OCR_TIMEOUT_MS = 30_000;
   const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('ocr_timeout')), OCR_TIMEOUT_MS);
     chrome.runtime.sendMessage(
       { type: 'OCR_PROCESS', id: crypto.randomUUID?.() || String(Date.now()), imageData, languages: ocrLanguages },
       (resp) => {
+        clearTimeout(timer);
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
