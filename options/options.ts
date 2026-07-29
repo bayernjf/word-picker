@@ -91,6 +91,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   await refreshAuthStatus();
   await refreshSyncStatus();
 
+  const versionEl = document.getElementById("version-info");
+  if (versionEl) {
+    const version = browser.runtime.getManifest().version;
+    versionEl.textContent = `WordPicker v${version}`;
+  }
+
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes.authData) {
       void refreshAuthStatus();
