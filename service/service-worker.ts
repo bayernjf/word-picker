@@ -39,6 +39,19 @@ import {
 import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
 
+declare const chrome: {
+  offscreen: {
+    createDocument(options: { url: string; reasons: string[]; justification: string }): Promise<void>;
+    closeDocument(): Promise<void>;
+    hasDocument(): Promise<boolean>;
+    Reason: Record<string, string>;
+  };
+  runtime: {
+    sendMessage(message: unknown, callback: (response: unknown) => void): void;
+    lastError: { message: string } | undefined;
+  };
+};
+
 const logger = createLogger('service-worker');
 
 self.addEventListener('unhandledrejection', (event) => {
@@ -249,6 +262,8 @@ async function handleMessage(message: Message, sender?: browser.Runtime.MessageS
       return handleAuthGetCredentials();
     case MESSAGE_TYPES.TRANSLATE:
       return handleTranslate(message.word as string);
+    case MESSAGE_TYPES.IMAGE_OCR:
+      return handleImageOcr(message.imageUrl as string);
     case MESSAGE_TYPES.PING:
       return { pong: true };
     default:
@@ -1411,6 +1426,98 @@ async function handleAuthStatus(): Promise<AuthStatusResult> {
     isLoggedIn: Boolean(auth?.accessToken && auth?.refreshToken),
     user: auth?.user || null,
   };
+}
+
+const OFFSCREEN_URL = 'offscreen/ocr.html';
+const OFFSCREEN_IDLE_TIMEOUT_MS = 60_000;
+
+let offscreenCreated = false;
+let offscreenIdleTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function ensureOffscreenDocument(): Promise<void> {
+  if (offscreenCreated) {
+    resetOffscreenIdleTimer();
+    return;
+  }
+  const existingContexts = await chrome.offscreen.hasDocument
+    ? await chrome.offscreen.hasDocument().then(() => true).catch(() => false)
+    : false;
+  if (!existingContexts) {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: [chrome.offscreen.Reason.USER_MEDIA || 'USER_MEDIA'],
+      justification: 'OCR image text recognition using Tesseract.js',
+    });
+  }
+  offscreenCreated = true;
+  resetOffscreenIdleTimer();
+}
+
+function resetOffscreenIdleTimer(): void {
+  if (offscreenIdleTimer) {
+    clearTimeout(offscreenIdleTimer);
+  }
+  offscreenIdleTimer = setTimeout(() => {
+    chrome.offscreen.closeDocument?.().catch(() => {});
+    offscreenCreated = false;
+    offscreenIdleTimer = null;
+  }, OFFSCREEN_IDLE_TIMEOUT_MS);
+}
+
+async function handleImageOcr(imageUrl: string): Promise<{
+  words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
+  imageWidth: number;
+  imageHeight: number;
+}> {
+  if (!imageUrl) {
+    throw new Error('image_url_required');
+  }
+
+  let imageData: string;
+  if (imageUrl.startsWith('data:')) {
+    imageData = imageUrl;
+  } else {
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`fetch_image_failed: HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    imageData = await blobToBase64(blob);
+  }
+
+  await ensureOffscreenDocument();
+
+  const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { type: 'OCR_PROCESS', id: crypto.randomUUID?.() || String(Date.now()), imageData },
+      (resp) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve((resp || {}) as Record<string, unknown>);
+      }
+    );
+  });
+
+  if (response.error) {
+    throw new Error(String(response.error));
+  }
+
+  return {
+    words: (response.words as Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>) || [],
+    imageWidth: Number(response.imageWidth) || 0,
+    imageHeight: Number(response.imageHeight) || 0,
+  };
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('blob_to_base64_failed'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 async function handleTranslate(word: string): Promise<{ translation: TranslationResult | OfflineTranslationResult; fromCache?: boolean; fromOffline?: boolean }> {

@@ -14,7 +14,8 @@
   },
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "offscreen"
   ],
   "host_permissions": [
     "https://api.dictionaryapi.dev/*",
