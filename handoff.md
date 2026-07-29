@@ -36,12 +36,12 @@ f064022 docs: expand code audit report with 3 new LOW findings
 
 | Language | Code | Detection | Word Segmentation | OCR Model | Translation |
 |----------|------|-----------|-------------------|-----------|-------------|
-| English | en | Default | Regex | eng | Free Dictionary + MyMemory + Youdao |
-| French | fr | Feature chars (é, è, ê...) | Regex | fra | MyMemory (fr→zh-CN) + Youdao |
-| Spanish | es | Feature chars (ñ, ¡, ¿) | Regex | spa | MyMemory (es→zh-CN) + Youdao |
-| German | de | Latin+diacritics | Regex | deu | MyMemory (de→zh-CN) + Youdao |
-| Korean | ko | Hangul Unicode detection | Space-based | kor | MyMemory (ko→zh-CN) + Youdao |
-| Japanese | ja | CJK Unicode detection | TinySegmenter | jpn | MyMemory (ja→zh-CN) + Youdao |
+| English | en | Default | Regex | eng | Free Dictionary + Wiktionary + MyMemory + Youdao |
+| French | fr | Feature chars (é, è, ê...) | Regex | fra | Wiktionary IPA + MyMemory (fr→zh-CN) + Youdao |
+| Spanish | es | Feature chars (ñ, ¡, ¿) | Regex | spa | Wiktionary IPA + MyMemory (es→zh-CN) + Youdao |
+| German | de | Latin+diacritics | Regex | deu | Wiktionary IPA + MyMemory (de→zh-CN) + Youdao |
+| Korean | ko | Hangul Unicode detection | Space-based | kor | Wiktionary IPA + MyMemory (ko→zh-CN) + Youdao |
+| Japanese | ja | CJK Unicode detection | TinySegmenter | jpn | Wiktionary IPA + MyMemory (ja→zh-CN) + Youdao |
 
 ## Translation Pipeline
 
@@ -53,8 +53,10 @@ Network APIs (called in parallel with 2.5s timeout each):
 1. **MyMemory** — `langpair={sourceLang}|zh-CN`, works for all languages
 2. **Free Dictionary API** — English only (phonetic/definition/example)
 3. **Youdao Dictionary** — All languages attempted (may return empty for non-English)
+4. **Wiktionary REST API** — All languages (IPA phonetic + English definition), free, no auth required
 
-Priority: Youdao meaning > MyMemory translation > Free Dictionary English definition
+Priority: Youdao meaning > MyMemory translation > Free Dictionary English definition > Wiktionary definition
+Phonetic priority: Free Dictionary API (English) > Wiktionary IPA (all languages) > fallback
 
 ## Available Effects (8 total)
 
@@ -123,7 +125,7 @@ Priority: Youdao meaning > MyMemory translation > Free Dictionary English defini
 |------|---------|
 | `lib/constants.ts` | Language configs, platform detection, DEFAULT_SYNC_BASE_URL |
 | `lib/storage.ts` | chrome.storage wrapper, defaults, migration |
-| `lib/translator.ts` | Translation API calls (MyMemory + Free Dictionary + Youdao) |
+| `lib/translator.ts` | Translation API calls (MyMemory + Free Dictionary + Wiktionary + Youdao) |
 | `lib/supabase.ts` | Supabase Auth (signIn/signUp/refresh/signOut) |
 | `content/content-script.ts` | Lookup core: keyboard, hover, popup, word selection |
 | `content/fireworks.ts` | All 8 visual effects |
