@@ -38,6 +38,7 @@ export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
   { code: "fr", label: "法语", ocrCode: "fra", myMemoryLang: "fr", enabled: true },
   { code: "es", label: "西班牙语", ocrCode: "spa", myMemoryLang: "es", enabled: true },
   { code: "de", label: "德语", ocrCode: "deu", myMemoryLang: "de", enabled: true },
+  { code: "ko", label: "韩语", ocrCode: "kor", myMemoryLang: "ko", enabled: true },
   { code: "ja", label: "日语", ocrCode: "jpn", myMemoryLang: "ja", enabled: true },
 ];
 
@@ -46,6 +47,7 @@ export const LANGUAGE_WORD_PATTERNS: Record<string, string> = {
   fr: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
   es: "[A-Za-z\u00C0-\u00FF\u00D1\u00F1][A-Za-z\u00C0-\u00FF\u00D1\u00F1'-]{1,44}",
   de: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
+  ko: "[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]+",
   ja: "[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
 };
 

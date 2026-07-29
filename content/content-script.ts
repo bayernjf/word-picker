@@ -73,12 +73,14 @@ function getFireworksAPI(): FireworksAPI {
     en: "[A-Za-z][A-Za-z'-]{1,44}",
     fr: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
     es: "[A-Za-z\u00C0-\u00FF\u00D1\u00F1][A-Za-z\u00C0-\u00FF\u00D1\u00F1'-]{1,44}",
+    ko: "[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]+",
     ja: "[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
   };
 
   const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;
   const SPANISH_FEATURE_CHARS = /[\u00F1\u00A1\u00BF]/;
   const CJK_REGEX = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]/;
+  const HANGUL_REGEX = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/;
   const CJK_PUNCT_REGEX = /^[\u3000-\u303F\uFF00-\uFFEF\s]+$/;
 
   interface TinySegmenter {
@@ -99,12 +101,17 @@ function getFireworksAPI(): FireworksAPI {
     return CJK_REGEX.test(ch);
   }
 
+  function isHangulChar(ch: string): boolean {
+    return HANGUL_REGEX.test(ch);
+  }
+
   function getActiveLookupKey(): LookupKey {
     return settings.lookupKeys?.[currentPlatform] || "Control";
   }
 
   function detectWordLanguage(word: string): string {
     if (CJK_REGEX.test(word)) return "ja";
+    if (HANGUL_REGEX.test(word)) return "ko";
     if (SPANISH_FEATURE_CHARS.test(word)) return "es";
     if (FRENCH_FEATURE_CHARS.test(word)) return "fr";
     return "en";
@@ -622,7 +629,7 @@ function getFireworksAPI(): FireworksAPI {
       updatePopup({
         word: detection.word,
         phonetic: "",
-        meaning: `当前未启用${({ en: "英语", fr: "法语", es: "西班牙语", de: "德语", ja: "日语" } as Record<string, string>)[detectedLang] || detectedLang}识别，请在设置中勾选`,
+        meaning: `当前未启用${({ en: "英语", fr: "法语", es: "西班牙语", de: "德语", ko: "韩语", ja: "日语" } as Record<string, string>)[detectedLang] || detectedLang}识别，请在设置中勾选`,
         exampleEn: "",
         exampleZh: "",
         sentence: extractSentenceFromDetection(detection),
@@ -747,6 +754,17 @@ function getFireworksAPI(): FireworksAPI {
           }
           pos = segEnd;
         }
+      }
+    }
+
+    if (offset < text.length && isHangulChar(text[offset]) && isLanguageEnabled("ko")) {
+      let start = offset;
+      let end = offset;
+      while (start > 0 && isHangulChar(text[start - 1])) start--;
+      while (end < text.length && isHangulChar(text[end])) end++;
+      const word = text.slice(start, end);
+      if (word.length > 0) {
+        return { word, node: caret.node, text, start, end, offset };
       }
     }
 
@@ -940,8 +958,8 @@ function getFireworksAPI(): FireworksAPI {
       if (!word.text || !word.text.trim()) continue;
       const cleanText = word.text.trim();
       if (word.confidence < 30) continue;
-      if (!/[A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\u00C0-\u00FF]/.test(cleanText)) continue;
-      if (cleanText.length <= 1 && !/[\u4E00-\u9FFF\u3400-\u4DBF]/.test(cleanText)) continue;
+      if (!/[A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\u00C0-\u00FF\uAC00-\uD7AF]/.test(cleanText)) continue;
+      if (cleanText.length <= 1 && !/[\u4E00-\u9FFF\u3400-\u4DBF\uAC00-\uD7AF]/.test(cleanText)) continue;
 
       const hotspot = document.createElement("div");
       hotspot.className = "wp-ocr-hotspot";
@@ -1228,7 +1246,7 @@ function getFireworksAPI(): FireworksAPI {
         <button class="popup-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
-      <div class="popup-source-lang">${({ en: "[英]", fr: "[法]", es: "[西]", de: "[德]", ja: "[日]" } as Record<string, string>)[currentLang] || ""}</div>
+      <div class="popup-source-lang">${({ en: "[英]", fr: "[法]", es: "[西]", de: "[德]", ko: "[한]", ja: "[日]" } as Record<string, string>)[currentLang] || ""}</div>
       <div class="popup-meaning ${data.error ? "is-error" : ""}">${escapeHtml(data.meaning || "")}</div>
       ${noteMarkup}
       ${exampleMarkup}
