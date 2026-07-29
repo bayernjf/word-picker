@@ -6,6 +6,7 @@ const logger = createLogger("translator");
 const MEMORY_TRANSLATE_ENDPOINT = "https://api.mymemory.translated.net/get";
 const FREE_DICTIONARY_ENDPOINT = "https://api.dictionaryapi.dev/api/v2/entries/en";
 const YOUDAO_DICT_ENDPOINT = "https://dict.youdao.com/jsonapi";
+const WIKTIONARY_ENDPOINT = "https://en.wiktionary.org/api/rest_v1/page/summary";
 
 interface FallbackEntry {
   meaning: string;
@@ -90,6 +91,11 @@ interface YoudaoResult {
   meaning: string;
 }
 
+interface WiktionaryResult {
+  phonetic: string;
+  definitionEn: string;
+}
+
 // 翻译 API 并发限流器
 const MAX_CONCURRENT_TRANSLATE = 3;
 const MAX_QUEUED_TRANSLATE = 50;
@@ -132,24 +138,25 @@ async function translateWithFreeApis(word: string, useYoudao: boolean = true, so
 async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true, sourceLang: string = "en"): Promise<TranslationResult> {
   const fallback = buildFallbackTranslation(word);
   const isEnglish = sourceLang === "en";
-  const [translationResult, dictionaryResult, youdaoResult] = await Promise.allSettled([
+  const [translationResult, dictionaryResult, youdaoResult, wiktionaryResult] = await Promise.allSettled([
     withTimeout(fetchFreeTranslation(word, sourceLang), 2500),
     isEnglish ? withTimeout(fetchDictionaryEntry(word), 2500) : Promise.resolve(null),
     useYoudao ? withTimeout(fetchYoudaoDict(word), 2500) : Promise.resolve(null),
+    withTimeout(fetchWiktionaryEntry(word), 2500),
   ]);
 
   const translation = translationResult.status === "fulfilled" ? translationResult.value : null;
   const dictionary = dictionaryResult.status === "fulfilled" ? dictionaryResult.value : null;
   const youdao = youdaoResult.status === "fulfilled" ? youdaoResult.value : null;
+  const wiktionary = wiktionaryResult.status === "fulfilled" ? wiktionaryResult.value : null;
 
-  if (!translation && !dictionary && !youdao) {
+  if (!translation && !dictionary && !youdao && !wiktionary) {
     return buildFallbackTranslation(word, "免费翻译接口暂时不可用，已返回本地兜底结果");
   }
 
   let exampleZh = fallback.exampleZh || "";
   if (dictionary?.exampleEn) {
     try {
-      // 例句翻译加超时，避免第二轮串行请求拖慢整体释义返回
       exampleZh = await withTimeout(
         fetchFreeTranslation(dictionary.exampleEn),
         1500
@@ -162,8 +169,8 @@ async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true, 
 
   return {
     word,
-    meaning: buildMeaning(translation, dictionary, fallback, youdao),
-    phonetic: dictionary?.phonetic || fallback.phonetic || "",
+    meaning: buildMeaning(translation, dictionary, fallback, youdao, wiktionary),
+    phonetic: dictionary?.phonetic || wiktionary?.phonetic || fallback.phonetic || "",
     exampleEn: dictionary?.exampleEn || fallback.exampleEn || "",
     exampleZh,
     note: buildNote(translation, dictionary, youdao),
@@ -304,11 +311,35 @@ function buildFallbackTranslation(word: string, note: string = ""): TranslationR
   };
 }
 
+async function fetchWiktionaryEntry(word: string): Promise<WiktionaryResult | null> {
+  const response = await fetch(`${WIKTIONARY_ENDPOINT}/${encodeURIComponent(word.toLowerCase())}`);
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`Wiktionary 接口请求失败：HTTP ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const ipa = String(payload?.pronunciation?.ipa || "").trim();
+  const extract = String(payload?.extract || "").trim();
+
+  if (!ipa && !extract) {
+    return null;
+  }
+
+  return {
+    phonetic: formatPhonetic(ipa),
+    definitionEn: extract,
+  };
+}
+
 function buildMeaning(
   translation: string | null,
   dictionary: { phonetic: string; partOfSpeech: string; definitionEn: string; exampleEn: string } | null,
   fallback: FallbackEntry,
-  youdao: YoudaoResult | null
+  youdao: YoudaoResult | null,
+  wiktionary: WiktionaryResult | null = null
 ): string {
   // 优先使用有道英汉词典释义（含词性，最贴近中文用户）
   const youdaoMeaning = String(youdao?.meaning || "").trim();
@@ -326,6 +357,11 @@ function buildMeaning(
     return partOfSpeech
       ? `${partOfSpeech} ${dictionary.definitionEn}`
       : dictionary.definitionEn;
+  }
+
+  const wiktionaryDef = String(wiktionary?.definitionEn || "").trim();
+  if (wiktionaryDef) {
+    return partOfSpeech ? `${partOfSpeech} ${wiktionaryDef}` : wiktionaryDef;
   }
 
   return fallback.meaning;
