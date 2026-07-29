@@ -55,6 +55,7 @@ function getFireworksAPI(): FireworksAPI {
     hoverDelay: number;
     autoSpeak: boolean;
     fireworksEffect: "canvas" | "css" | "none";
+    recognizeLanguages: string[];
   }
 
   const DEFAULT_SETTINGS: Settings = {
@@ -65,13 +66,41 @@ function getFireworksAPI(): FireworksAPI {
     hoverDelay: 100,
     autoSpeak: false,
     fireworksEffect: "canvas",
+    recognizeLanguages: ["en"],
   };
+
+  const LANGUAGE_WORD_PATTERNS: Record<string, string> = {
+    en: "[A-Za-z][A-Za-z'-]{1,44}",
+    fr: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
+    es: "[A-Za-z\u00C0-\u00FF\u00D1\u00F1][A-Za-z\u00C0-\u00FF\u00D1\u00F1'-]{1,44}",
+  };
+
+  const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;
+  const SPANISH_FEATURE_CHARS = /[\u00F1\u00A1\u00BF]/;
 
   function getActiveLookupKey(): LookupKey {
     return settings.lookupKeys?.[currentPlatform] || "Control";
   }
 
-  const WORD_PATTERN = /[A-Za-z][A-Za-z'-]{1,44}/g;
+  function detectWordLanguage(word: string): string {
+    if (SPANISH_FEATURE_CHARS.test(word)) return "es";
+    if (FRENCH_FEATURE_CHARS.test(word)) return "fr";
+    return "en";
+  }
+
+  function isLanguageEnabled(lang: string): boolean {
+    return (settings.recognizeLanguages || ["en"]).includes(lang);
+  }
+
+  function buildWordPattern(languages: string[]): RegExp {
+    const patterns = languages
+      .map(lang => LANGUAGE_WORD_PATTERNS[lang])
+      .filter(Boolean);
+    const combined = patterns.length > 0 ? patterns.join("|") : LANGUAGE_WORD_PATTERNS.en;
+    return new RegExp(combined, "g");
+  }
+
+  let wordPattern: RegExp = buildWordPattern(["en"]);
   const EXCLUDED_SELECTOR = "input, textarea, [contenteditable='true'], [contenteditable=''], pre, code";
   const CURSOR_STYLE_ID = "word-picker-cursor-style";
   const HIGHLIGHT_STYLE_ID = "word-picker-highlight-style";
@@ -126,6 +155,7 @@ function getFireworksAPI(): FireworksAPI {
   interface CurrentLookup extends DetectionResult {
     signature: string;
     translation?: TranslationData;
+    sourceLang?: string;
   }
 
   interface TranslationData {
@@ -179,9 +209,11 @@ function getFireworksAPI(): FireworksAPI {
         ...DEFAULT_SETTINGS,
         ...raw,
       } as Settings;
+      wordPattern = buildWordPattern(settings.recognizeLanguages || ["en"]);
     } catch (error) {
       _logger.warn("加载设置失败，使用默认设置：", error);
       settings = { ...DEFAULT_SETTINGS };
+      wordPattern = buildWordPattern(["en"]);
     }
   }
 
@@ -256,6 +288,7 @@ function getFireworksAPI(): FireworksAPI {
       ...DEFAULT_SETTINGS,
       ...raw,
     } as Settings;
+    wordPattern = buildWordPattern(settings.recognizeLanguages || ["en"]);
     exitPenMode();
   }
 
@@ -562,9 +595,24 @@ function getFireworksAPI(): FireworksAPI {
     }
 
     _logger.debug('lookupAtPoint', { word: detection.word, x, y });
+    const detectedLang = detectWordLanguage(detection.word);
+    if (!isLanguageEnabled(detectedLang)) {
+      updatePopup({
+        word: detection.word,
+        phonetic: "",
+        meaning: `当前未启用${detectedLang === "en" ? "英语" : detectedLang === "fr" ? "法语" : "西班牙语"}识别，请在设置中勾选`,
+        exampleEn: "",
+        exampleZh: "",
+        sentence: extractSentenceFromDetection(detection),
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+      return;
+    }
     currentLookup = {
       ...detection,
       signature,
+      sourceLang: detectedLang,
     };
     currentState = STATE.LOADING;
     showPopup(x, y, buildLoadingData(detection.word));
@@ -590,6 +638,7 @@ function getFireworksAPI(): FireworksAPI {
       const response = await sendMessage({
         type: "TRANSLATE",
         word: detection.word,
+        sourceLang: detectedLang,
       });
 
       if (requestToken !== latestRequestToken || currentLookup?.signature !== signature) {
@@ -652,7 +701,7 @@ function getFireworksAPI(): FireworksAPI {
     }
 
     const offset = Math.max(0, Math.min(caret.offset, text.length));
-    const matches = [...text.matchAll(WORD_PATTERN)];
+    const matches = [...text.matchAll(wordPattern)];
 
     for (const match of matches) {
       const start = match.index ?? 0;
@@ -901,9 +950,10 @@ function getFireworksAPI(): FireworksAPI {
     currentState = STATE.LOADING;
     showPopup(x, y, buildLoadingData(word));
 
+    const detectedLang = detectWordLanguage(word);
     const requestToken = ++latestRequestToken;
     try {
-      const response = await sendMessage({ type: "TRANSLATE", word });
+      const response = await sendMessage({ type: "TRANSLATE", word, sourceLang: detectedLang });
       if (requestToken !== latestRequestToken) return;
 
       const translation = (response.translation as TranslationData) || buildLoadingData(word);
@@ -916,6 +966,7 @@ function getFireworksAPI(): FireworksAPI {
         offset: 0,
         signature: `${word}|0|${word.length}|${word}`,
         translation,
+        sourceLang: detectedLang,
       };
       updatePopup(translation);
       currentState = STATE.SHOWING;
@@ -1027,6 +1078,75 @@ function getFireworksAPI(): FireworksAPI {
     });
   }
 
+  function showLangDropdown(langTag: HTMLSpanElement): void {
+    const existingDropdown = langTag.parentElement?.querySelector(".popup-lang-dropdown");
+    if (existingDropdown) {
+      existingDropdown.remove();
+      return;
+    }
+    const configuredLangs = settings.recognizeLanguages || ["en"];
+    if (configuredLangs.length <= 1) return;
+    const currentLang = langTag.getAttribute("data-current-lang") || "en";
+    const dropdown = document.createElement("div");
+    dropdown.className = "popup-lang-dropdown";
+    dropdown.innerHTML = configuredLangs.map(code => {
+      const label = code.toUpperCase();
+      const active = code === currentLang ? " active" : "";
+      return `<div class="popup-lang-option${active}" data-lang="${escapeHtml(code)}">${label}</div>`;
+    }).join("");
+    langTag.parentElement?.appendChild(dropdown);
+    dropdown.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      if (!target.classList.contains("popup-lang-option")) return;
+      const newLang = target.getAttribute("data-lang");
+      if (!newLang || newLang === currentLang) {
+        dropdown.remove();
+        return;
+      }
+      dropdown.remove();
+      handleLanguageSwitch(newLang);
+    });
+  }
+
+  async function handleLanguageSwitch(newLang: string): Promise<void> {
+    if (!currentLookup?.word) return;
+    const word = currentLookup.word;
+    currentLookup.sourceLang = newLang;
+    currentState = STATE.LOADING;
+    updatePopup(buildLoadingData(word));
+    const requestToken = ++latestRequestToken;
+    try {
+      const response = await sendMessage({ type: "TRANSLATE", word, sourceLang: newLang });
+      if (requestToken !== latestRequestToken) return;
+      const translation = (response.translation as TranslationData) || buildLoadingData(word);
+      currentLookup.translation = translation;
+      updatePopup({
+        ...translation,
+        sentence: currentLookup.text ? extractSentenceFromText(currentLookup.text) : undefined,
+      });
+      currentState = STATE.SHOWING;
+    } catch (error) {
+      if (requestToken !== latestRequestToken) return;
+      updatePopup({
+        word,
+        phonetic: "",
+        meaning: error instanceof Error ? error.message : "翻译失败",
+        exampleEn: "",
+        exampleZh: "",
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+    }
+  }
+
+  function extractSentenceFromText(text: string): string {
+    const idx = text.indexOf(currentLookup?.word || "");
+    if (idx < 0) return text.slice(0, 120);
+    const start = Math.max(0, idx - 40);
+    const end = Math.min(text.length, idx + 80);
+    return text.slice(start, end);
+  }
+
   function buildPopupElement(data: TranslationData): HTMLDivElement {
     const container = document.createElement("div");
     container.className = "popup-container";
@@ -1043,10 +1163,17 @@ function getFireworksAPI(): FireworksAPI {
     const sentenceMarkup = data.sentence
       ? `<div class="popup-sentence">上下文：${escapeHtml(data.sentence)}</div>`
       : "";
+    const currentLang = currentLookup?.sourceLang || "en";
+    const langLabel = currentLang.toUpperCase();
+    const configuredLangs = settings.recognizeLanguages || ["en"];
+    const langDropdownMarkup = configuredLangs.length > 1
+      ? `<span class="popup-lang-tag" data-current-lang="${escapeHtml(currentLang)}">${langLabel} ▾</span>`
+      : "";
 
     container.innerHTML = `
       <div class="popup-header">
         <span class="popup-word">${escapeHtml(data.word || "")}</span>
+        ${langDropdownMarkup}
         <button class="popup-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
@@ -1101,6 +1228,14 @@ function getFireworksAPI(): FireworksAPI {
     container.querySelector(".popup-close")!.addEventListener("click", () => {
       closePopupAndReset();
     });
+
+    const langTag = container.querySelector(".popup-lang-tag") as HTMLSpanElement | null;
+    if (langTag) {
+      langTag.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showLangDropdown(langTag);
+      });
+    }
 
     container.querySelector(".btn-save")!.addEventListener("click", async () => {
       if (!currentLookup?.translation) {
@@ -1568,6 +1703,53 @@ function getFireworksAPI(): FireworksAPI {
       font-weight: 700;
       color: #f5f7ff;
       word-break: break-word;
+    }
+
+    .popup-lang-tag {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #30363d;
+      color: #8b949e;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      position: relative;
+    }
+
+    .popup-lang-tag:hover {
+      background: #484f58;
+      color: #c9d1d9;
+    }
+
+    .popup-lang-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      margin-top: 4px;
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 4px 0;
+      z-index: 10;
+      min-width: 60px;
+    }
+
+    .popup-lang-option {
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #c9d1d9;
+      cursor: pointer;
+      text-align: center;
+    }
+
+    .popup-lang-option:hover {
+      background: #30363d;
+    }
+
+    .popup-lang-option.active {
+      color: #58a6ff;
+      font-weight: 600;
     }
 
     .popup-close {
