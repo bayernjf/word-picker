@@ -861,6 +861,9 @@ function mapServerWordToLocal(word: ServerWord): Word {
   };
 }
 
+const MIN_VALID_BOOK_ID_LENGTH = 10;
+const SKIP_LOCAL_PLACEHOLDER_BOOK_ID_LENGTH = 20;
+
 function mapLocalWordToServer(word: Word): ServerWordPayload {
   const timeAdded = word.timeAdded || word._legacy?.createdAt || Date.now();
   const timeUpdated = word.timeUpdated || timeAdded;
@@ -963,10 +966,10 @@ async function pushWords(auth: AuthData): Promise<{ ok: boolean; processed: numb
   syncQueue.forEach((item) => {
     const mapped = mapLocalWordToServer(item);
     const bookId = mapped.book_id;
-    if ((!bookId || bookId === 'local_default_book' || bookId.length < 10) && syncBook) {
+    if ((!bookId || bookId === 'local_default_book' || bookId.length < MIN_VALID_BOOK_ID_LENGTH) && syncBook) {
       mapped.book_id = syncBook.id;
     }
-    if (typeof mapped.book_id !== 'string' || mapped.book_id.length <= 20) {
+    if (typeof mapped.book_id !== 'string' || mapped.book_id.length <= SKIP_LOCAL_PLACEHOLDER_BOOK_ID_LENGTH) {
       return;
     }
 
@@ -1276,7 +1279,7 @@ async function getRememberedCredentials(): Promise<{ email: string; password?: s
   };
 }
 
-async function saveRememberedCredentials(email: string, _password: string, remember: boolean): Promise<void> {
+async function saveRememberedCredentials(email: string, remember: boolean): Promise<void> {
   if (remember) {
     await browser.storage.local.set({
       [STORAGE_REMEMBERED_CREDENTIALS]: {
@@ -1310,7 +1313,7 @@ async function handleAuthSetRemember(remember: boolean): Promise<{ ok: boolean }
   if (remember) {
     const credentials = await getRememberedCredentials();
     if (credentials?.email) {
-      await saveRememberedCredentials(credentials.email, credentials.password || '', true);
+      await saveRememberedCredentials(credentials.email, true);
     }
   } else {
     await browser.storage.local.remove([STORAGE_REMEMBERED_CREDENTIALS]);
@@ -1391,7 +1394,7 @@ async function handleAuthLogin(email: string, password: string): Promise<AuthRes
     lastSyncAt: Date.now(),
     expiresAt: session.expires_at || null,
   });
-  await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
+  await saveRememberedCredentials(email, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
   flushSyncQueue(settings, true).catch((err) => {
     logger.warn('[handleAuthLogin] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
@@ -1429,7 +1432,7 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
     lastSyncAt: Date.now(),
     expiresAt: session.expires_at || null,
   });
-  await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
+  await saveRememberedCredentials(email, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
 
   try {
@@ -1469,14 +1472,7 @@ async function handleAuthLogout(): Promise<{ ok: boolean }> {
   } catch (err) {
     logger.warn('[handleAuthLogout] clear alarm failed', { error: err instanceof Error ? err.message : String(err) });
   }
-  await setAuthData(null);
-  await setCurrentUserEmail(null);
   await clearUserData();
-  try {
-    await browser.storage.local.remove(['deviceId']);
-  } catch (err) {
-    logger.warn('[handleAuthLogout] remove deviceId failed', { error: err instanceof Error ? err.message : String(err) });
-  }
   return { ok: true };
 }
 
