@@ -939,7 +939,9 @@ function getFireworksAPI(): FireworksAPI {
     for (const word of ocrResult.words) {
       if (!word.text || !word.text.trim()) continue;
       const cleanText = word.text.trim();
-      if (!/[A-Za-z]/.test(cleanText)) continue;
+      if (word.confidence < 30) continue;
+      if (!/[A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\u00C0-\u00FF]/.test(cleanText)) continue;
+      if (cleanText.length <= 1 && !/[\u4E00-\u9FFF\u3400-\u4DBF]/.test(cleanText)) continue;
 
       const hotspot = document.createElement("div");
       hotspot.className = "wp-ocr-hotspot";
