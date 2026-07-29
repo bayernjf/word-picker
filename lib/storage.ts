@@ -58,7 +58,7 @@ export interface Settings {
   maxCacheSize: number;
   syncEnabled: boolean;
   rememberDevice7Days: boolean;
-  fireworksEffect: "canvas" | "css" | "none";
+  fireworksEffect: "canvas" | "css" | "confetti" | "sparkle" | "ripple" | "emoji" | "hearts" | "none";
   logLevel: "debug" | "info" | "warn" | "error";
   recognizeLanguages: string[];
 }

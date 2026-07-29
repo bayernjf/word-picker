@@ -332,7 +332,7 @@ async function handleSubmit(event: Event): Promise<void> {
     translator: (form as SettingsFormElements).translator.value,
     useYoudaoDict: (form as SettingsFormElements).useYoudaoDict.checked,
     autoSpeak: (form as SettingsFormElements).autoSpeak.checked,
-    fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as "canvas" | "css" | "none",
+    fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as "canvas" | "css" | "confetti" | "sparkle" | "ripple" | "emoji" | "hearts" | "none",
     maxCacheSize: clampNumber((form as SettingsFormElements).maxCacheSize.value, SETTINGS_LIMITS.CACHE_SIZE_MIN, SETTINGS_LIMITS.CACHE_SIZE_MAX, SETTINGS_LIMITS.CACHE_SIZE_DEFAULT),
     rememberDevice7Days: (form as SettingsFormElements).rememberDevice7Days.checked,
     recognizeLanguages: getSelectedLanguages(),

@@ -54,7 +54,7 @@ function getFireworksAPI(): FireworksAPI {
     lookupKeys: PerPlatformLookupKeys;
     hoverDelay: number;
     autoSpeak: boolean;
-    fireworksEffect: "canvas" | "css" | "none";
+    fireworksEffect: "canvas" | "css" | "confetti" | "sparkle" | "ripple" | "emoji" | "hearts" | "none";
     recognizeLanguages: string[];
   }
 
