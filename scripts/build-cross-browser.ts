@@ -11,7 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { copyStaticAssets, copyPolyfill, copyTesseractAssets } from "./copy-static.js";
+import { copyStaticAssets, copyPolyfill, copyTesseractAssets, copyTinySegmenter } from "./copy-static.js";
 
 const ROOT = process.cwd();
 const SRC = path.join(ROOT, "dist", "extension");
@@ -287,6 +287,9 @@ function main(): void {
 
   // Copy Tesseract.js assets for OCR
   copyTesseractAssets();
+
+  // Copy TinySegmenter for Japanese word segmentation
+  copyTinySegmenter();
 
   const target = process.argv[2] || "all";
 
