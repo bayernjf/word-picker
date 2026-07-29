@@ -41,6 +41,13 @@
 
 ## 🟢 P2 - 功能增强
 
+- [ ] **图片 OCR 取词 — 浏览器实测与调优**
+  - 已完成基础实现：Tesseract.js + Offscreen Document + 热区叠加
+  - 需要在真实网页上测试各种图片（跨域、data URL、动态加载）
+  - 关注首次加载语言模型的速度（~4MB 英文模型）
+  - OCR 识别精度调优（小字、模糊图片、复杂背景）
+  - 考虑支持中英文混合 OCR（`chi_sim+eng`）
+
 - [ ] **设置项同步到云端（账号绑定）**
   - 当前设置仅保存在 `browser.storage.local`，换设备/重装会丢失
   - 需设计后端 API（或复用现有 settings 字段），让快捷键、翻译源、特效等配置随账号同步
@@ -66,3 +73,4 @@
 - [x] Release workflow 支持 main/dev/tag 三种触发
 - [x] 旧数据格式迁移（lookupKey → lookupKeys、错误 syncBaseUrl 清理）
 - [x] .env.example 模板完善
+- [x] 图片 OCR 取词基础实现（Tesseract.js + Offscreen Document + 单词热区叠加）
