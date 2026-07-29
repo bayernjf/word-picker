@@ -31,6 +31,7 @@
         "content/browser-polyfill.js",
         "content/shared.js",
         "content/fireworks.js",
+        "content/tiny-segmenter.js",
         "content/content-script.js"
       ],
       "run_at": "document_idle",

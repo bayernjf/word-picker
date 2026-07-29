@@ -37,13 +37,14 @@ export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
   { code: "en", label: "英语", ocrCode: "eng", myMemoryLang: "en", enabled: true },
   { code: "fr", label: "法语", ocrCode: "fra", myMemoryLang: "fr", enabled: true },
   { code: "es", label: "西班牙语", ocrCode: "spa", myMemoryLang: "es", enabled: true },
-  { code: "ja", label: "日语", ocrCode: "jpn", myMemoryLang: "ja", enabled: false, note: "即将支持" },
+  { code: "ja", label: "日语", ocrCode: "jpn", myMemoryLang: "ja", enabled: true },
 ];
 
 export const LANGUAGE_WORD_PATTERNS: Record<string, string> = {
   en: "[A-Za-z][A-Za-z'-]{1,44}",
   fr: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
   es: "[A-Za-z\u00C0-\u00FF\u00D1\u00F1][A-Za-z\u00C0-\u00FF\u00D1\u00F1'-]{1,44}",
+  ja: "[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
 };
 
 export const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;

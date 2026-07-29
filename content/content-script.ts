@@ -73,16 +73,38 @@ function getFireworksAPI(): FireworksAPI {
     en: "[A-Za-z][A-Za-z'-]{1,44}",
     fr: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
     es: "[A-Za-z\u00C0-\u00FF\u00D1\u00F1][A-Za-z\u00C0-\u00FF\u00D1\u00F1'-]{1,44}",
+    ja: "[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
   };
 
   const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;
   const SPANISH_FEATURE_CHARS = /[\u00F1\u00A1\u00BF]/;
+  const CJK_REGEX = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]/;
+  const CJK_PUNCT_REGEX = /^[\u3000-\u303F\uFF00-\uFFEF\s]+$/;
+
+  interface TinySegmenter {
+    segment(text: string): string[];
+  }
+
+  let segmenterInstance: TinySegmenter | null = null;
+  function getSegmenter(): TinySegmenter | null {
+    if (segmenterInstance) return segmenterInstance;
+    if (typeof (window as unknown as { TinySegmenter?: new () => TinySegmenter }).TinySegmenter === "function") {
+      segmenterInstance = new (window as unknown as { TinySegmenter: new () => TinySegmenter }).TinySegmenter();
+      return segmenterInstance;
+    }
+    return null;
+  }
+
+  function isCJKChar(ch: string): boolean {
+    return CJK_REGEX.test(ch);
+  }
 
   function getActiveLookupKey(): LookupKey {
     return settings.lookupKeys?.[currentPlatform] || "Control";
   }
 
   function detectWordLanguage(word: string): string {
+    if (CJK_REGEX.test(word)) return "ja";
     if (SPANISH_FEATURE_CHARS.test(word)) return "es";
     if (FRENCH_FEATURE_CHARS.test(word)) return "fr";
     return "en";
@@ -600,7 +622,7 @@ function getFireworksAPI(): FireworksAPI {
       updatePopup({
         word: detection.word,
         phonetic: "",
-        meaning: `当前未启用${detectedLang === "en" ? "英语" : detectedLang === "fr" ? "法语" : "西班牙语"}识别，请在设置中勾选`,
+        meaning: `当前未启用${({ en: "英语", fr: "法语", es: "西班牙语", ja: "日语" } as Record<string, string>)[detectedLang] || detectedLang}识别，请在设置中勾选`,
         exampleEn: "",
         exampleZh: "",
         sentence: extractSentenceFromDetection(detection),
@@ -701,6 +723,33 @@ function getFireworksAPI(): FireworksAPI {
     }
 
     const offset = Math.max(0, Math.min(caret.offset, text.length));
+
+    if (offset < text.length && isCJKChar(text[offset]) && isLanguageEnabled("ja")) {
+      const segmenter = getSegmenter();
+      if (segmenter) {
+        const segments = segmenter.segment(text);
+        let pos = 0;
+        for (const seg of segments) {
+          const segStart = pos;
+          const segEnd = pos + seg.length;
+          if (offset >= segStart && offset < segEnd) {
+            if (!CJK_PUNCT_REGEX.test(seg)) {
+              return {
+                word: seg,
+                node: caret.node,
+                text,
+                start: segStart,
+                end: segEnd,
+                offset,
+              };
+            }
+            break;
+          }
+          pos = segEnd;
+        }
+      }
+    }
+
     const matches = [...text.matchAll(wordPattern)];
 
     for (const match of matches) {
