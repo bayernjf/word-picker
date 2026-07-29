@@ -622,7 +622,7 @@ function getFireworksAPI(): FireworksAPI {
       updatePopup({
         word: detection.word,
         phonetic: "",
-        meaning: `当前未启用${({ en: "英语", fr: "法语", es: "西班牙语", ja: "日语" } as Record<string, string>)[detectedLang] || detectedLang}识别，请在设置中勾选`,
+        meaning: `当前未启用${({ en: "英语", fr: "法语", es: "西班牙语", de: "德语", ja: "日语" } as Record<string, string>)[detectedLang] || detectedLang}识别，请在设置中勾选`,
         exampleEn: "",
         exampleZh: "",
         sentence: extractSentenceFromDetection(detection),
@@ -1228,7 +1228,7 @@ function getFireworksAPI(): FireworksAPI {
         <button class="popup-close" type="button" aria-label="关闭">×</button>
       </div>
       <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
-      <div class="popup-source-lang">${({ en: "[英]", fr: "[法]", es: "[西]", ja: "[日]" } as Record<string, string>)[currentLang] || ""}</div>
+      <div class="popup-source-lang">${({ en: "[英]", fr: "[法]", es: "[西]", de: "[德]", ja: "[日]" } as Record<string, string>)[currentLang] || ""}</div>
       <div class="popup-meaning ${data.error ? "is-error" : ""}">${escapeHtml(data.meaning || "")}</div>
       ${noteMarkup}
       ${exampleMarkup}
