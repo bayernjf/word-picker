@@ -7,10 +7,10 @@ const __dirname = path.dirname(__filename);
 const testPageUrl = 'file://' + path.resolve(__dirname, 'test-page.html');
 
 test.describe('Wordbook Management', () => {
-  test('popup should open and show wordbook UI when logged in', async ({ context, extensionId, page }) => {
+  test('popup should open and show wordbook UI when logged in', async ({ loggedInContext, extensionId, page }) => {
     await page.goto(testPageUrl);
 
-    const popupPage = await context.newPage();
+    const popupPage = await loggedInContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
 
     await expect(popupPage.locator('h1')).toContainText('WordPicker', { timeout: 5000 });
@@ -19,7 +19,7 @@ test.describe('Wordbook Management', () => {
     await expect(popupPage.locator('#export-csv')).toBeVisible();
   });
 
-  test('should add word via content script and see it in popup', async ({ context, extensionId, page }) => {
+  test('should add word via content script and see it in popup', async ({ loggedInContext, extensionId, page }) => {
     await page.goto(testPageUrl);
 
     const wordElement = page.locator('text=courage').first();
@@ -37,7 +37,7 @@ test.describe('Wordbook Management', () => {
     await page.keyboard.up('Control');
 
     // Open popup and check if word appears
-    const popupPage = await context.newPage();
+    const popupPage = await loggedInContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
     await popupPage.waitForTimeout(1000);
 
@@ -45,8 +45,8 @@ test.describe('Wordbook Management', () => {
     await expect(wordList).toBeVisible();
   });
 
-  test('should search words in popup', async ({ context, extensionId }) => {
-    const popupPage = await context.newPage();
+  test('should search words in popup', async ({ loggedInContext, extensionId }) => {
+    const popupPage = await loggedInContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
 
     await popupPage.waitForTimeout(1000);
@@ -61,10 +61,10 @@ test.describe('Wordbook Management', () => {
     await expect(wordList).toBeVisible();
   });
 
-  test('should show WordBase link in popup', async ({ context, extensionId, page }) => {
+  test('should show WordBase link in popup', async ({ loggedInContext, extensionId, page }) => {
     await page.goto(testPageUrl);
 
-    const popupPage = await context.newPage();
+    const popupPage = await loggedInContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
     await popupPage.waitForTimeout(1000);
 
