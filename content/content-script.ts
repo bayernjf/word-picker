@@ -197,6 +197,7 @@ function getFireworksAPI(): FireworksAPI {
     note?: string;
     error?: boolean;
     provider?: string;
+    audio?: string;
   }
 
   interface SourceRange {
@@ -689,7 +690,7 @@ function getFireworksAPI(): FireworksAPI {
       }
 
       if (settings.autoSpeak) {
-        speakWord(translation.word || detection.word);
+        speakWord(translation.word || detection.word, currentLookup?.sourceLang || "en");
       }
     } catch (error) {
       if (requestToken !== latestRequestToken || currentLookup?.signature !== signature) {
@@ -1245,7 +1246,10 @@ function getFireworksAPI(): FireworksAPI {
         ${langDropdownMarkup}
         <button class="popup-close" type="button" aria-label="关闭">×</button>
       </div>
-      <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
+      <div class="popup-phonetic-row">
+        <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
+        ${data.audio ? `<button class="btn-audio" type="button" title="播放发音">▶</button>` : ""}
+      </div>
       <div class="popup-source-lang">${({ en: "[英]", fr: "[法]", es: "[西]", de: "[德]", ko: "[한]", ja: "[日]" } as Record<string, string>)[currentLang] || ""}</div>
       <div class="popup-meaning ${data.error ? "is-error" : ""}">${escapeHtml(data.meaning || "")}</div>
       ${noteMarkup}
@@ -1298,6 +1302,14 @@ function getFireworksAPI(): FireworksAPI {
     container.querySelector(".popup-close")!.addEventListener("click", () => {
       closePopupAndReset();
     });
+
+    const audioBtn = container.querySelector(".btn-audio") as HTMLButtonElement | null;
+    if (audioBtn && data.audio) {
+      audioBtn.addEventListener("click", () => {
+        const audio = new Audio(data.audio);
+        audio.play().catch(() => {});
+      });
+    }
 
     const langTag = container.querySelector(".popup-lang-tag") as HTMLSpanElement | null;
     if (langTag) {
@@ -1598,61 +1610,52 @@ function getFireworksAPI(): FireworksAPI {
     }, 0);
   }
 
-  function speakWord(word: string): void {
+  const LANG_VOICE_MAP: Record<string, string> = {
+    en: "en-US",
+    fr: "fr-FR",
+    es: "es-ES",
+    de: "de-DE",
+    ko: "ko-KR",
+    ja: "ja-JP",
+  };
+
+  function speakWord(word: string, sourceLang: string = "en"): void {
     if (!("speechSynthesis" in window) || !word) {
       return;
     }
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(word);
-    utterance.lang = "en-US";
-    // 语速略低于默认，更接近自然朗读节奏
+    const lang = LANG_VOICE_MAP[sourceLang] || "en-US";
+    utterance.lang = lang;
     utterance.rate = 0.9;
     utterance.pitch = 1;
-    const voice = pickEnglishVoice();
+    const voice = pickVoiceForLang(sourceLang);
     if (voice) {
       utterance.voice = voice;
     }
     window.speechSynthesis.speak(utterance);
   }
 
-  // 优先选择高质量的英文女声（Google/系统女声），避免默认机器人音色。
-  // 注意：voices 列表可能在页面加载后才异步就绪，取不到时先用默认 voice。
-  function pickEnglishVoice(): SpeechSynthesisVoice | null {
+  function pickVoiceForLang(lang: string): SpeechSynthesisVoice | null {
     const voices = window.speechSynthesis.getVoices();
     if (!voices || voices.length === 0) {
       return null;
     }
-    const enVoices = voices.filter((v) => /^en(-|_)/i.test(v.lang));
-    const pool = enVoices.length > 0 ? enVoices : voices;
+    const langPrefix = LANG_VOICE_MAP[lang] || "en";
+    const langCode = langPrefix.split("-")[0];
+    const langVoices = voices.filter((v) => v.lang.toLowerCase().startsWith(langCode.toLowerCase()));
+    const pool = langVoices.length > 0 ? langVoices : voices;
 
-    // 按优先级匹配高质量音色：Google 系列 > 女性/自然名 > 其余
-    const preferredNames = [
-      "Google US English",
-      "Google UK English Female",
-      "Samantha",
-      "Karen",
-      "Moira",
-      "Tessa",
-      "Zira",
-      "Microsoft Aria",
-      "Microsoft Jenny",
-    ];
-    for (const name of preferredNames) {
-      const found = pool.find((v) => v.name === name);
-      if (found) {
-        return found;
-      }
-    }
     const google = pool.find((v) => /google/i.test(v.name));
     if (google) {
       return google;
     }
-    const female = pool.find((v) => /female|aria|jenny|zira|samantha|karen|moira|tessa/i.test(v.name));
-    if (female) {
-      return female;
-    }
     return pool[0] || null;
+  }
+
+  function pickEnglishVoice(): SpeechSynthesisVoice | null {
+    return pickVoiceForLang("en");
   }
 
   // voices 列表异步加载：首次就绪后无需额外动作，下次 speakWord 会自动取到
@@ -1835,8 +1838,35 @@ function getFireworksAPI(): FireworksAPI {
     .popup-phonetic {
       font-size: 13px;
       color: #8b949e;
-      margin-top: 4px;
       min-height: 19px;
+    }
+
+    .popup-phonetic-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .btn-audio {
+      background: transparent;
+      border: 1px solid #45475a;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #89b4fa;
+      font-size: 10px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .btn-audio:hover {
+      background: #313244;
+      border-color: #89b4fa;
     }
 
     .popup-source-lang {
