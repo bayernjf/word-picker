@@ -44,9 +44,9 @@ export interface TranslationResult {
   exampleZh: string;
   note: string;
   provider: string;
+  audio?: string;
 }
 
-// 给 Promise 加超时，避免单个慢接口拖慢整体
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
@@ -77,7 +77,7 @@ export async function translateWord(word: string, settings: Settings, sourceLang
 
 interface FreeDictionaryEntry {
   phonetic?: string;
-  phonetics?: Array<{ text?: string }>;
+  phonetics?: Array<{ text?: string; audio?: string }>;
   meanings?: Array<{
     partOfSpeech?: string;
     definitions?: Array<{
@@ -96,7 +96,6 @@ interface WiktionaryResult {
   definitionEn: string;
 }
 
-// 翻译 API 并发限流器
 const MAX_CONCURRENT_TRANSLATE = 3;
 const MAX_QUEUED_TRANSLATE = 50;
 let concurrentRequests = 0;
@@ -175,6 +174,7 @@ async function doTranslateWithFreeApis(word: string, useYoudao: boolean = true, 
     exampleZh,
     note: buildNote(translation, dictionary, youdao),
     provider: "free",
+    audio: dictionary?.audio || "",
   };
 }
 
@@ -208,6 +208,7 @@ async function fetchDictionaryEntry(word: string): Promise<{
   partOfSpeech: string;
   definitionEn: string;
   exampleEn: string;
+  audio: string;
 } | null> {
   const response = await fetch(`${FREE_DICTIONARY_ENDPOINT}/${encodeURIComponent(word.toLowerCase())}`);
   if (response.status === 404) {
@@ -228,6 +229,7 @@ async function fetchDictionaryEntry(word: string): Promise<{
       entry.phonetics?.find((item) => item?.text)?.text ||
       ""
   );
+  const audio = entry.phonetics?.find((item) => item?.audio)?.audio || "";
   const meaningNode = entry.meanings?.find((item) => item?.definitions && item.definitions.length > 0) || null;
   const definitionNode = meaningNode?.definitions?.find((item) => item?.definition) || null;
 
@@ -236,6 +238,7 @@ async function fetchDictionaryEntry(word: string): Promise<{
     partOfSpeech: meaningNode?.partOfSpeech || "",
     definitionEn: definitionNode?.definition || "",
     exampleEn: definitionNode?.example || "",
+    audio,
   };
 }
 
@@ -250,7 +253,6 @@ async function fetchYoudaoDict(word: string): Promise<YoudaoResult | null> {
 
   const payload = await response.json();
 
-  // 优先取基础词典释义（ec：英汉），结构最规整
   const ecTrs = payload?.ec?.word?.[0]?.trs as unknown[] | undefined;
   if (Array.isArray(ecTrs) && ecTrs.length > 0) {
     const meanings = ecTrs
@@ -267,7 +269,6 @@ async function fetchYoudaoDict(word: string): Promise<YoudaoResult | null> {
     }
   }
 
-  // 兜底取网络释义（web_trans），按 support 选最高票
   const webTrans = payload?.web_trans?.["web-translation"] as unknown[] | undefined;
   if (Array.isArray(webTrans) && webTrans.length > 0) {
     const sameEntry =
@@ -341,7 +342,6 @@ function buildMeaning(
   youdao: YoudaoResult | null,
   wiktionary: WiktionaryResult | null = null
 ): string {
-  // 优先使用有道英汉词典释义（含词性，最贴近中文用户）
   const youdaoMeaning = String(youdao?.meaning || "").trim();
   if (youdaoMeaning) {
     return youdaoMeaning;

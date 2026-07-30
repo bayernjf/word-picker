@@ -11,6 +11,7 @@ export interface CachedTranslation {
   exampleZh?: string;
   note?: string;
   provider: string;
+  audio?: string;
   ts: number;
   lastAccessedAt: number;
 }
