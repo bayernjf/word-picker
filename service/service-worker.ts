@@ -186,12 +186,21 @@ browser.storage.onChanged.addListener((changes, area) => {
 });
 
 browser.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== 'sync-words') return;
-  try {
-    const settings = await getSettings();
-    await flushSyncQueue(settings);
-  } catch (err) {
-    logger.error('[onAlarm] sync failed', { error: err instanceof Error ? err.message : String(err) });
+  if (alarm.name === 'sync-words') {
+    try {
+      const settings = await getSettings();
+      await flushSyncQueue(settings);
+    } catch (err) {
+      logger.error('[onAlarm] sync failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (alarm.name === 'review-reminder') {
+    try {
+      await checkReviewReminder();
+    } catch (err) {
+      logger.error('[onAlarm] review-reminder failed', { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 });
 
@@ -515,6 +524,14 @@ async function handleExportWords(format: string, words: Word[]): Promise<{
     };
   }
 
+  if (normalized === 'anki') {
+    return {
+      format: 'anki',
+      fileName: 'wordpicker-words-anki.txt',
+      data: toAnki(words),
+    };
+  }
+
   return {
     format: 'json',
     fileName: 'wordpicker-words.json',
@@ -551,6 +568,25 @@ function csvEscape(value: unknown): string {
   }
   text = text.replace(/"/g, '""');
   return `"${text}"`;
+}
+
+function toAnki(words: Word[]): string {
+  return words.map((word) => {
+    const front = word.word;
+    const phonetic = word.phonetic || word._legacy?.phonetic || '';
+    const meaning = word.translation || word._legacy?.meaning || '';
+    const exampleEn = word.exampleEn || word._legacy?.exampleEn || '';
+    const exampleZh = word.exampleZh || word._legacy?.exampleZh || '';
+    const contexts = (word.contexts || []).map((c) => c.context).filter(Boolean).join('<br>');
+    const back = [
+      phonetic ? `<i>${phonetic}</i>` : '',
+      meaning ? `<div>${meaning}</div>` : '',
+      exampleEn ? `<div class="example">${exampleEn}</div>` : '',
+      exampleZh ? `<div class="example">${exampleZh}</div>` : '',
+      contexts ? `<div class="contexts">${contexts}</div>` : '',
+    ].filter(Boolean).join('');
+    return `${front}\t${back}`;
+  }).join('\n');
 }
 
 async function handleSyncNow(): Promise<FlushResult> {
@@ -648,6 +684,59 @@ async function setupAlarms(): Promise<void> {
   const existing = await browser.alarms.get('sync-words');
   if (!existing) {
     await browser.alarms.create('sync-words', { periodInMinutes: 3 });
+  }
+  const reviewExisting = await browser.alarms.get('review-reminder');
+  if (!reviewExisting) {
+    await browser.alarms.create('review-reminder', { periodInMinutes: 60 });
+  }
+}
+
+const REVIEW_INTERVALS_MS = [
+  1 * 24 * 60 * 60 * 1000,
+  3 * 24 * 60 * 60 * 1000,
+  7 * 24 * 60 * 60 * 1000,
+  14 * 24 * 60 * 60 * 1000,
+  30 * 24 * 60 * 60 * 1000,
+];
+
+async function checkReviewReminder(): Promise<void> {
+  const settings = await getSettings();
+  if (settings.syncEnabled === false) return;
+
+  const words = await getWords();
+  if (words.length === 0) return;
+
+  const now = Date.now();
+  let dueCount = 0;
+
+  for (const word of words) {
+    const addedAt = word.timeAdded || word._legacy?.createdAt || 0;
+    if (!addedAt) continue;
+    const age = now - addedAt;
+    const dueInterval = REVIEW_INTERVALS_MS[Math.min(word.frequency || 1, REVIEW_INTERVALS_MS.length) - 1] || REVIEW_INTERVALS_MS[0];
+    if (age >= dueInterval) {
+      const timeUpdated = word.timeUpdated || addedAt;
+      const timeSinceReview = now - timeUpdated;
+      if (timeSinceReview >= dueInterval) {
+        dueCount++;
+      }
+    }
+  }
+
+  if (dueCount === 0) return;
+
+  try {
+    const permission = await browser.permissions.contains({ permissions: ['notifications'] });
+    if (!permission) return;
+
+    await browser.notifications.create('review-reminder', {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('assets/icons/icon128.png'),
+      title: 'WordPicker \u590d\u4e60\u63d0\u9192',
+      message: `\u4f60\u6709 ${dueCount} \u4e2a\u5355\u8bcd\u5f85\u590d\u4e60\uff0c\u6253\u5f00\u5f39\u7a97\u5f00\u59cb\u590d\u4e60\u5427\uff01`,
+    });
+  } catch (err) {
+    logger.warn('[checkReviewReminder] notification failed', { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -1293,14 +1382,14 @@ async function saveRememberedCredentials(email: string, remember: boolean): Prom
 }
 
 function isAuthExpired(auth: AuthData): boolean {
-  return typeof auth.expiresAt === 'number' && Date.now() > auth.expiresAt;
+  return typeof auth.expiresAt === 'number' && Date.now() > auth.expiresAt * 1000;
 }
 
 const TOKEN_REFRESH_LEAD_MS = 5 * 60 * 1000;
 
 function isAuthExpiringSoon(auth: AuthData): boolean {
   if (typeof auth.expiresAt !== 'number') return false;
-  return Date.now() + TOKEN_REFRESH_LEAD_MS > auth.expiresAt;
+  return Date.now() + TOKEN_REFRESH_LEAD_MS > auth.expiresAt * 1000;
 }
 
 // 勾选/取消“在此设备记住7天”时，管理登录凭证的保存
@@ -1469,6 +1558,7 @@ async function handleAuthLogout(): Promise<{ ok: boolean }> {
   }
   try {
     await browser.alarms.clear('sync-words');
+    await browser.alarms.clear('review-reminder');
   } catch (err) {
     logger.warn('[handleAuthLogout] clear alarm failed', { error: err instanceof Error ? err.message : String(err) });
   }
@@ -1618,6 +1708,7 @@ async function handleTranslate(word: string, sourceLang?: string): Promise<{ tra
         exampleZh: cached.exampleZh || "",
         note: cached.note || "",
         provider: cached.provider,
+        audio: cached.audio || "",
       },
       fromCache: true,
     };
