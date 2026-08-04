@@ -19,6 +19,7 @@
     "notifications"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://api.dictionaryapi.dev/*",
     "https://api.mymemory.translated.net/*",
     "https://dict.youdao.com/*",
@@ -55,6 +56,6 @@
     "open_in_tab": true
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'self'; base-uri 'self'"
   }
 }

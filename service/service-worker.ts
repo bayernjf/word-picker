@@ -39,6 +39,14 @@ import {
 import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
 
+interface OcrPort {
+  name: string;
+  postMessage(msg: unknown): void;
+  onMessage: { addListener(cb: (msg: unknown) => void): void; removeListener(cb: (msg: unknown) => void): void };
+  onDisconnect: { addListener(cb: () => void): void };
+  disconnect(): void;
+}
+
 declare const chrome: {
   offscreen: {
     createDocument(options: { url: string; reasons: string[]; justification: string }): Promise<void>;
@@ -48,7 +56,14 @@ declare const chrome: {
   };
   runtime: {
     sendMessage(message: unknown, callback: (response: unknown) => void): void;
+    connect(connectInfo?: { name?: string }): OcrPort;
     lastError: { message: string } | undefined;
+  };
+  storage: {
+    onChanged: {
+      addListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+      removeListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+    };
   };
 };
 
@@ -172,7 +187,7 @@ browser.runtime.onStartup.addListener(() => {
 
 let settingsPushTimer: ReturnType<typeof setTimeout> | null = null;
 
-browser.storage.onChanged.addListener((changes, area) => {
+chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes.settings) return;
   const newSettings = changes.settings.newValue as Partial<Settings> | undefined;
   if (newSettings?.logLevel) {
@@ -205,6 +220,10 @@ browser.alarms.onAlarm.addListener(async (alarm) => {
 });
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const msg = message as Message;
+  if (msg?.type === 'OCR_PROCESS' || msg?.type === 'PING') {
+    return false as true;
+  }
   const safeSendResponse = (data: unknown): void => {
     try {
       sendResponse(data as never);
@@ -212,7 +231,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // port closed, ignore
     }
   };
-  handleMessage(message as Message, sender)
+  handleMessage(msg, sender)
     .then((payload) => safeSendResponse({ success: true, ...(payload as object) }))
     .catch((error) => {
       safeSendResponse({
@@ -233,7 +252,11 @@ async function handleMessage(message: Message, sender?: browser.Runtime.MessageS
   await ensureDefaults();
   logger.debug('handleMessage', { type: message?.type });
 
-  if (!message?.type || !isKnownMessageType(message.type)) {
+  if (!message?.type) {
+    throw new Error(`unknown_message_type`);
+  }
+
+  if (!isKnownMessageType(message.type)) {
     throw new Error(`unknown_message_type`);
   }
 
@@ -1589,7 +1612,8 @@ async function handleAuthStatus(): Promise<AuthStatusResult> {
 }
 
 const OFFSCREEN_URL = 'offscreen/ocr.html';
-const OFFSCREEN_IDLE_TIMEOUT_MS = 60_000;
+const OFFSCREEN_IDLE_TIMEOUT_MS = 300_000;
+const OCR_PORT_NAME = 'wordpicker-ocr';
 
 let offscreenCreated = false;
 let offscreenIdleTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1599,18 +1623,40 @@ async function ensureOffscreenDocument(): Promise<void> {
     resetOffscreenIdleTimer();
     return;
   }
-  const existingContexts = await chrome.offscreen.hasDocument
-    ? await chrome.offscreen.hasDocument().then(() => true).catch(() => false)
-    : false;
-  if (!existingContexts) {
-    await chrome.offscreen.createDocument({
-      url: OFFSCREEN_URL,
-      reasons: [chrome.offscreen.Reason.USER_MEDIA || 'USER_MEDIA'],
-      justification: 'OCR image text recognition using Tesseract.js',
-    });
+
+  logger.info('ensureOffscreenDocument: creating offscreen document');
+  try {
+    const exists = await chrome.offscreen.hasDocument().catch(() => false);
+    if (!exists) {
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_URL,
+        reasons: [chrome.offscreen.Reason.WORKERS || 'WORKERS'],
+        justification: 'OCR image text recognition using Tesseract.js',
+      });
+      logger.info('ensureOffscreenDocument: offscreen document created');
+    } else {
+      logger.info('ensureOffscreenDocument: offscreen document already exists');
+    }
+  } catch (e) {
+    if (String(e).includes('only a single offscreen')) {
+      logger.warn('ensureOffscreenDocument: offscreen document already exists (by error)', e);
+    } else {
+      logger.error('ensureOffscreenDocument: failed to create offscreen document', e);
+      throw e;
+    }
   }
+
   offscreenCreated = true;
   resetOffscreenIdleTimer();
+}
+
+async function teardownOffscreenDocument(): Promise<void> {
+  offscreenCreated = false;
+  if (offscreenIdleTimer) {
+    clearTimeout(offscreenIdleTimer);
+    offscreenIdleTimer = null;
+  }
+  try { await chrome.offscreen.closeDocument?.(); } catch { /* already gone */ }
 }
 
 function resetOffscreenIdleTimer(): void {
@@ -1651,33 +1697,78 @@ async function handleImageOcr(imageUrl: string): Promise<{
     imageData = await blobToBase64(blob);
   }
 
+  if (typeof chrome === 'undefined' || !chrome.offscreen) {
+    throw new Error('ocr_unsupported_platform');
+  }
+
   await ensureOffscreenDocument();
 
   const OCR_TIMEOUT_MS = 30_000;
-  const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('ocr_timeout')), OCR_TIMEOUT_MS);
-    chrome.runtime.sendMessage(
-      { type: 'OCR_PROCESS', id: crypto.randomUUID?.() || String(Date.now()), imageData, languages: ocrLanguages },
-      (resp) => {
-        clearTimeout(timer);
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve((resp || {}) as Record<string, unknown>);
-      }
-    );
-  });
+  const MAX_OCR_RETRIES = 3;
+  let lastError: Error | null = null;
 
-  if (response.error) {
-    throw new Error(String(response.error));
+  for (let attempt = 0; attempt < MAX_OCR_RETRIES; attempt++) {
+    logger.info(`handleImageOcr: attempt ${attempt + 1}/${MAX_OCR_RETRIES}`);
+    try {
+      const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        let settled = false;
+        try {
+          const port = chrome.runtime.connect({ name: OCR_PORT_NAME });
+
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            port.disconnect();
+            reject(new Error('ocr_timeout'));
+          }, OCR_TIMEOUT_MS);
+
+          port.onDisconnect.addListener(() => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            }
+          });
+
+          port.onMessage.addListener((resp: unknown) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            port.disconnect();
+            resolve((resp || {}) as Record<string, unknown>);
+          });
+
+          port.postMessage({ type: 'OCR_PROCESS', id: crypto.randomUUID?.() || String(Date.now()), imageData, languages: ocrLanguages });
+        } catch (e) {
+          if (settled) return;
+          settled = true;
+          reject(e instanceof Error ? e : new Error(String(e)));
+        }
+      });
+
+      if (response.error) {
+        throw new Error(String(response.error));
+      }
+
+      return {
+        words: (response.words as Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>) || [],
+        imageWidth: Number(response.imageWidth) || 0,
+        imageHeight: Number(response.imageHeight) || 0,
+      };
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      logger.warn(`handleImageOcr: attempt ${attempt + 1} failed`, lastError.message);
+      if (attempt < MAX_OCR_RETRIES - 1) {
+        await teardownOffscreenDocument();
+        await new Promise(r => setTimeout(r, 300));
+        await ensureOffscreenDocument();
+      }
+    }
   }
 
-  return {
-    words: (response.words as Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>) || [],
-    imageWidth: Number(response.imageWidth) || 0,
-    imageHeight: Number(response.imageHeight) || 0,
-  };
+  logger.error('handleImageOcr: all attempts failed', lastError?.message);
+  throw lastError || new Error('ocr_connect_failed');
 }
 
 function blobToBase64(blob: Blob): Promise<string> {

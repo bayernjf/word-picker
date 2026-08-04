@@ -55,23 +55,6 @@ export function copyPolyfill(): void {
   console.log('[copy-static] browser-polyfill.js → content/');
 }
 
-export function copyTesseractAssets(): void {
-  const tesseractDist = path.join(ROOT, 'node_modules', 'tesseract.js', 'dist');
-  const dest = path.join(DIST, 'assets', 'tesseract');
-  fs.mkdirSync(dest, { recursive: true });
-
-  const files = ['tesseract.min.js', 'worker.min.js'];
-  for (const file of files) {
-    const src = path.join(tesseractDist, file);
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, path.join(dest, file));
-      console.log(`[copy-static] tesseract/${file}`);
-    } else {
-      console.warn(`[copy-static] Missing tesseract asset: ${file}`);
-    }
-  }
-}
-
 export function copyTinySegmenter(): void {
   const src = path.join(ROOT, 'node_modules', 'tiny-segmenter', 'lib', 'index.js');
   const dest = path.join(DIST, 'content', 'tiny-segmenter.js');
@@ -92,6 +75,5 @@ export function copyTinySegmenter(): void {
 const isMainModule = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/^\.[/\\]/, ''));
 if (isMainModule) {
   copyStaticAssets();
-  copyTesseractAssets();
   copyTinySegmenter();
 }
