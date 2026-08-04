@@ -27,6 +27,7 @@ import {
 } from '../lib/utils.js';
 import { QUEUE_MAX_LENGTH, DEFAULT_SYNC_BASE_URL } from '../lib/constants.js';
 import { MESSAGE_TYPES, isKnownMessageType } from '../lib/messaging.js';
+import { mapLocalWordToServer, type ServerWordPayload } from '../lib/syncPayload.js';
 import { createLogger, setLogLevel } from '../lib/logger.js';
 import {
   setSupabaseSession,
@@ -357,34 +358,11 @@ interface ServerWord {
   level?: string;
   familiarity?: number;
   sync_version?: number;
+  source_language?: string;
   meta?: {
     sourceUrl?: string;
     sourceTitle?: string;
     createdAt?: number;
-  };
-}
-
-interface ServerWordPayload {
-  word: string;
-  frequency: number;
-  translation: string;
-  time_added: string;
-  time_updated: string;
-  contexts: Word['contexts'];
-  phonetic: string;
-  part_of_speech: string;
-  definition: string;
-  chinese_translation: string;
-  synonyms: string[];
-  examples: Array<{ en: string; zh: string }>;
-  usage_history: unknown[];
-  level: string;
-  familiarity: number;
-  book_id?: string;
-  meta: {
-    sourceUrl: string;
-    sourceTitle: string;
-    createdAt: number;
   };
 }
 
@@ -960,6 +938,7 @@ function mapServerWordToLocal(word: ServerWord): Word {
     timeUpdated,
     contexts: Array.isArray(word.contexts) ? word.contexts : [],
     bookId: word.book_id || '',
+    sourceLang: word.source_language,
     _legacy: {
       id: word.id,
       phonetic: word.phonetic || '',
@@ -975,42 +954,6 @@ function mapServerWordToLocal(word: ServerWord): Word {
 
 const MIN_VALID_BOOK_ID_LENGTH = 10;
 const SKIP_LOCAL_PLACEHOLDER_BOOK_ID_LENGTH = 20;
-
-function mapLocalWordToServer(word: Word): ServerWordPayload {
-  const timeAdded = word.timeAdded || word._legacy?.createdAt || Date.now();
-  const timeUpdated = word.timeUpdated || timeAdded;
-  return {
-    word: word.word,
-    frequency: word.frequency || Math.max((word.contexts || []).length || 0, 1),
-    translation: word.translation || '',
-    time_added: new Date(timeAdded).toISOString(),
-    time_updated: new Date(timeUpdated).toISOString(),
-    contexts: Array.isArray(word.contexts) ? word.contexts : [],
-    phonetic: word._legacy?.phonetic || '',
-    part_of_speech: '',
-    definition: '',
-    chinese_translation: word.translation || '',
-    synonyms: [],
-    examples:
-      word._legacy?.exampleEn || word._legacy?.exampleZh
-        ? [
-            {
-              en: word._legacy?.exampleEn || '',
-              zh: word._legacy?.exampleZh || '',
-            },
-          ]
-        : [],
-    usage_history: [],
-    level: 'B2',
-    familiarity: 0,
-    book_id: word.bookId,
-    meta: {
-      sourceUrl: word._legacy?.sourceUrl || '',
-      sourceTitle: word._legacy?.sourceTitle || '',
-      createdAt: timeAdded,
-    },
-  };
-}
 
 async function pushDeletes(auth: AuthData): Promise<{ ok: boolean; processed: number }> {
   const deleteQueue = await getDeleteQueue();
@@ -1097,6 +1040,8 @@ async function pushWords(auth: AuthData): Promise<{ ok: boolean; processed: numb
       mapped.usage_history = Array.isArray(existingServerWord.usage_history) ? existingServerWord.usage_history : mapped.usage_history;
       mapped.level = existingServerWord.level || mapped.level;
       mapped.familiarity = Number(existingServerWord.familiarity) || 0;
+      // 保留服务端已有的源语言，避免本地默认 'en' 把真实语言覆盖掉
+      mapped.source_language = existingServerWord.source_language || mapped.source_language;
       (mapped as ServerWordPayload & { sync_version?: number }).sync_version = Number(existingServerWord.sync_version) || 0;
     }
 

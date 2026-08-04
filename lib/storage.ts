@@ -24,6 +24,8 @@ export interface Word {
   timeUpdated: number;
   contexts: WordContext[];
   bookId: string;
+  // 单词源语言（ISO 639-1，如 en/ja/ko/fr/es/de），由 detectWordLanguage 或用户手动覆盖得到
+  sourceLang?: string;
   phonetic?: string;
   exampleEn?: string;
   exampleZh?: string;
