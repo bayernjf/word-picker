@@ -54,6 +54,7 @@ export const LANGUAGE_WORD_PATTERNS: Record<string, string> = {
 
 export const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;
 export const SPANISH_FEATURE_CHARS = /[\u00F1\u00A1\u00BF]/;
+export const GERMAN_FEATURE_CHARS = /[\u00C4\u00D6\u00DC\u00E4\u00F6\u00FC\u00DF\u1E9E]/;
 
 const MAC_RE = /Mac|iPod|iPhone|iPad/;
 

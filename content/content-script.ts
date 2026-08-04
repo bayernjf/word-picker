@@ -72,6 +72,7 @@ function getFireworksAPI(): FireworksAPI {
 
   const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;
   const SPANISH_FEATURE_CHARS = /[\u00F1\u00A1\u00BF]/;
+  const GERMAN_FEATURE_CHARS = /[\u00C4\u00D6\u00DC\u00E4\u00F6\u00FC\u00DF\u1E9E]/;
 
   function normalizeLookupKeys(raw: Record<string, unknown>): PerPlatformLookupKeys {
     if (raw.lookupKey !== undefined && !raw.lookupKeys) {
@@ -89,13 +90,20 @@ function getFireworksAPI(): FireworksAPI {
   function detectWordLanguage(word: string): string {
     if (CJK_REGEX.test(word)) return "ja";
     if (HANGUL_REGEX.test(word)) return "ko";
+    if (GERMAN_FEATURE_CHARS.test(word)) return "de";
     if (SPANISH_FEATURE_CHARS.test(word)) return "es";
     if (FRENCH_FEATURE_CHARS.test(word)) return "fr";
     return "en";
   }
 
   function buildWordPattern(languages: string[]): RegExp {
-    const patterns = languages.map(lang => LANGUAGE_WORD_PATTERNS[lang]).filter(Boolean);
+    // Put "en" last so accented-language patterns (supersets of the ASCII-only en
+    // pattern) match a whole word including diacritics instead of fragmenting it.
+    const ordered = [
+      ...languages.filter((l) => l !== "en"),
+      ...(languages.includes("en") ? ["en"] : []),
+    ];
+    const patterns = ordered.map((lang) => LANGUAGE_WORD_PATTERNS[lang]).filter(Boolean);
     const combined = patterns.length > 0 ? patterns.join("|") : LANGUAGE_WORD_PATTERNS.en;
     return new RegExp(combined, "g");
   }
@@ -1580,6 +1588,7 @@ function getFireworksAPI(): FireworksAPI {
       sourceRange?: SourceRange;
       translation: string;
     }>;
+    sourceLang?: string;
     _legacy: {
       id: string;
       phonetic: string;
@@ -1625,6 +1634,8 @@ function getFireworksAPI(): FireworksAPI {
       timeAdded: now,
       timeUpdated: now,
       contexts: contexts,
+      // 语言感知：把采集时识别到的源语言（detectWordLanguage 或用户手动覆盖）一并保存
+      sourceLang: lookup.sourceLang,
       // 保留旧数据作为兼容
       _legacy: {
         id: (crypto as Crypto).randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,

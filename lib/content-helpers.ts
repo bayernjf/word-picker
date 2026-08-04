@@ -6,6 +6,7 @@ import {
   LANGUAGE_WORD_PATTERNS,
   FRENCH_FEATURE_CHARS,
   SPANISH_FEATURE_CHARS,
+  GERMAN_FEATURE_CHARS,
   SUPPORTED_LANGUAGES,
   type LookupKey,
 } from "./constants.js";
@@ -41,13 +42,22 @@ const HANGUL_REGEX = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/;
 export function detectWordLanguage(word: string): string {
   if (CJK_REGEX.test(word)) return "ja";
   if (HANGUL_REGEX.test(word)) return "ko";
+  if (GERMAN_FEATURE_CHARS.test(word)) return "de";
   if (SPANISH_FEATURE_CHARS.test(word)) return "es";
   if (FRENCH_FEATURE_CHARS.test(word)) return "fr";
   return "en";
 }
 
 export function buildWordPattern(languages: string[]): RegExp {
-  const patterns = languages
+  // Put "en" last in the alternation: the accented-language patterns (fr/es/de)
+  // are supersets of the ASCII-only "en" pattern, so leading with them matches a
+  // whole word including diacritics instead of fragmenting it (en matches the ASCII
+  // prefix, the accented pattern the suffix). Without this, "niño"/"Schön" get split.
+  const ordered = [
+    ...languages.filter((l) => l !== "en"),
+    ...(languages.includes("en") ? ["en"] : []),
+  ];
+  const patterns = ordered
     .map((lang) => LANGUAGE_WORD_PATTERNS[lang])
     .filter(Boolean);
   const combined = patterns.length > 0 ? patterns.join("|") : LANGUAGE_WORD_PATTERNS.en;
