@@ -3,6 +3,15 @@ import { escapeHtml, sendMessage, formatDate, formatSyncStatusSummary, selectPre
 import { createLogger } from "../lib/logger.js";
 import type { Book, SyncStatus } from "../lib/utils.js";
 
+declare const chrome: {
+  storage: {
+    onChanged: {
+      addListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+      removeListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+    };
+  };
+};
+
 const logger = createLogger("popup");
 
 const searchInput = document.getElementById("search-input") as HTMLInputElement;
@@ -43,7 +52,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
 
   // 监听后台登录态变化（如 token 失效被清空），实时刷新界面
-  browser.storage.onChanged.addListener((changes, areaName) => {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes.authData) {
       void checkAuthAndRender();
     }
