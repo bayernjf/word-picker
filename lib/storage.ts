@@ -6,7 +6,7 @@ import {
   clampNumber,
 } from "./utils.js";
 import { SETTINGS_LIMITS } from "./constants.js";
-import type { LookupKey } from "./constants.js";
+import type { LookupKey, FireworksEffect } from "./constants.js";
 import type { Book } from "./utils.js";
 
 export interface WordContext {
@@ -58,7 +58,7 @@ export interface Settings {
   maxCacheSize: number;
   syncEnabled: boolean;
   rememberDevice7Days: boolean;
-  fireworksEffect: "canvas" | "css" | "confetti" | "sparkle" | "ripple" | "emoji" | "hearts" | "none";
+  fireworksEffect: FireworksEffect;
   logLevel: "debug" | "info" | "warn" | "error";
   recognizeLanguages: string[];
 }

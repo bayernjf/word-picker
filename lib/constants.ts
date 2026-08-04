@@ -23,6 +23,7 @@ export const QUEUE_MAX_LENGTH = 500;
 
 export type LookupKey = "Control" | "Meta" | "Alt" | "Shift";
 export type Platform = "mac" | "win";
+export type FireworksEffect = "canvas" | "css" | "confetti" | "sparkle" | "ripple" | "emoji" | "hearts" | "none";
 
 export interface LanguageConfig {
   code: string;
