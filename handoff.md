@@ -1,6 +1,6 @@
 # WordPicker Handoff Document
 
-> Last updated: 2026-07-30
+> Last updated: 2026-08-05 (Image OCR temporarily hidden via IMAGE_OCR_ENABLED flag)
 
 ## Project Overview
 
@@ -21,11 +21,19 @@ WordPicker is a cross-browser (Chrome/Edge/Safari) English word-picking extensio
 ## Recent Commits (word-picker)
 
 ```
+[uncommitted] fix(service): rewrite ensureOffscreenDocument, fix OCR never working
+[uncommitted] fix(content): increase OCR message timeout from 10s to 120s
+b2f1711 fix(e2e): fix login persistence and test fixtures
+2aff824 chore(manifest): add notifications permission for review reminders
+b80397d feat(popup): add Anki export button
+b2431dc feat(service): SRS review reminder, Anki export, and auth timestamp fix
+691b23f feat(content): multi-language TTS and audio play button in popup
+9254627 feat(lib): add audio field to translation cache and result
+be5caf5 docs(handoff): update translation pipeline with Wiktionary API
+525045a feat(build): add Wiktionary to host_permissions in manifest
+c1bc884 feat(lib): integrate Wiktionary API for multilingual IPA phonetics
+5131b6d docs: add handoff.md with project state summary
 8f90eab feat(options): add 5 new effect options to settings dropdown
-1e8ac8c refactor(lib): expand fireworksEffect type to include 5 new effect values
-c273125 feat(content): add 5 new word-add effects (confetti/sparkle/ripple/emoji/hearts)
-43afaeb refactor(service): fix 3 LOW-level audit issues
-f064022 docs: expand code audit report with 3 new LOW findings
 53f827a fix(service): add Korean OCR language mapping to langMap
 7ba4b65 feat(content): add Korean language recognition support
 500d8e5 fix(service): add German OCR language mapping to langMap
@@ -71,28 +79,34 @@ Phonetic priority: Free Dictionary API (English) > Wiktionary IPA (all languages
 | hearts | Hearts | Heart emojis rise and fade upward |
 | none | Off | No effect |
 
-## Code Audit Summary (2026-07-30)
+## Code Audit Summary (2026-08-03)
 
 ### Checks
 - tsc: 0 errors
-- ESLint: 0 errors, 0 warnings
-- Vitest: 62/62 tests pass
+- ESLint: 0 errors, 2 warnings (pre-existing)
+- Vitest: 82/82 tests pass
 - Chrome build: success
 
 ### Code Scale
-- ~6500 lines across 12 core files
-- Largest: content-script.ts (1965), service-worker.ts (1641)
+- ~7600 lines across 17 core files
+- Largest: content-script.ts (~2000), service-worker.ts (~1770), fireworks.ts (525)
 
 ### Open Issues
+
+**CRITICAL (fixed 2026-08-03):**
+- ~~OCR offscreen document never created — `hasDocument().then(() => true)` discarded return value, `connect()` readiness check never failed, content-script timeout too short (10s vs 30-90s actual). Root cause of "OCR never works".~~ → Fixed
 
 **MEDIUM:**
 1. Word missing `sourceLang` field — all languages mixed in one wordbook
 2. `handleSaveWord` throws when not logged in — should allow local-only save
 
-**LOW (all fixed in recent commits):**
+**LOW (all fixed):**
 - ~~saveRememberedCredentials unused password param~~ → Fixed
 - ~~handleAuthLogout redundant storage cleanup~~ → Fixed
 - ~~pushWords magic numbers for book_id length~~ → Fixed
+- ~~Offscreen document race condition (OCR "Receiving end does not exist")~~ → Fixed (PING readiness check + onMessage listener bypass)
+- ~~Service worker intercepts OCR_PROCESS/PING messages meant for offscreen~~ → Fixed (return false in onMessage)
+- ~~Content script crashes when browser.storage undefined after extension reload~~ → Fixed (optional chaining)
 
 **Known design constraints:**
 - content-script.ts duplicates lib/ types (unavoidable — isolated world)
@@ -117,7 +131,15 @@ Phonetic priority: Free Dictionary API (English) > Wiktionary IPA (all languages
 - [ ] Windows Chrome fireworks compatibility testing
 
 ### P2 — Enhancement
-- [ ] Image OCR real-world testing and tuning
+- [ ] Image OCR real-world testing and tuning（基础创建 bug 已修复，目前用户入口已临时隐藏，见下）
+
+## Image OCR Status (2026-08-05)
+
+- **Temporarily hidden**: The hover-over-image OCR entry point is disabled by the `IMAGE_OCR_ENABLED` flag in `content/content-script.ts` (set to `false` by default).
+- Rationale: base implementation is complete, but real-world testing on various web images (cross-origin, data URL, dynamically loaded, small/blurry text) and accuracy tuning are not yet done.
+- The backend `IMAGE_OCR` handler in `service/service-worker.ts` and the offscreen document code in `offscreen/ocr.ts` remain intact and functional.
+- To re-enable: set `IMAGE_OCR_ENABLED = true` in `content/content-script.ts` — no other code changes required.
+- Other features (text word lookup, multi-language detection, translation popup, SRS, fireworks) are unaffected.
 
 ## Key Files Reference
 
@@ -127,12 +149,14 @@ Phonetic priority: Free Dictionary API (English) > Wiktionary IPA (all languages
 | `lib/storage.ts` | chrome.storage wrapper, defaults, migration |
 | `lib/translator.ts` | Translation API calls (MyMemory + Free Dictionary + Wiktionary + Youdao) |
 | `lib/supabase.ts` | Supabase Auth (signIn/signUp/refresh/signOut) |
-| `content/content-script.ts` | Lookup core: keyboard, hover, popup, word selection |
+| `content/content-script.ts` | Lookup core: keyboard, hover, popup, word selection, OCR trigger |
 | `content/fireworks.ts` | All 8 visual effects |
-| `service/service-worker.ts` | Message routing, sync queue, auth, OCR scheduling |
+| `service/service-worker.ts` | Message routing, sync queue, auth, OCR offscreen management |
 | `options/options.ts` | Settings page: load/save, auth, sync trigger |
 | `popup/popup.ts` | Word list, search, export, book switching |
+| `offscreen/ocr.ts` | OCR image text recognition (Tesseract.js + offscreen document) |
 | `scripts/build-cross-browser.ts` | Cross-browser build + env injection + version injection |
+| `scripts/build-tesseract-assets.ts` | Tesseract resources (WASM + traineddata) build |
 
 ## Environment Variables
 
