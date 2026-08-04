@@ -1,8 +1,17 @@
 import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { SETTINGS_LIMITS, detectPlatform, SUPPORTED_LANGUAGES } from "../lib/constants.js";
+import { SETTINGS_LIMITS, detectPlatform, SUPPORTED_LANGUAGES, type FireworksEffect } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
 import type { Settings, LookupKey, Platform } from "../lib/storage.js";
+
+declare const chrome: {
+  storage: {
+    onChanged: {
+      addListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+      removeListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+    };
+  };
+};
 
 const logger = createLogger("options");
 
@@ -82,7 +91,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   authLogoutButton?.addEventListener("click", handleAuthLogout);
   rememberDeviceCheckbox?.addEventListener("change", handleRememberDeviceChange);
   (form as SettingsFormElements).lookupKey.addEventListener("change", () => void autoSaveSetting("lookupKey"));
-  (form as SettingsFormElements).fireworksEffect.addEventListener("change", () => void autoSaveSetting("fireworksEffect"));
+  (form as SettingsFormElements).fireworksEffect.addEventListener("change", () => {
+    void autoSaveSetting("fireworksEffect");
+    previewFireworksEffect((form as SettingsFormElements).fireworksEffect.value);
+  });
   languageOptionsContainer?.addEventListener("change", (e) => {
     if ((e.target as HTMLElement)?.tagName === "INPUT") {
       void autoSaveSetting("recognizeLanguages");
@@ -97,7 +109,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     versionEl.textContent = `WordPicker v${version}`;
   }
 
-  browser.storage.onChanged.addListener((changes, areaName) => {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes.authData) {
       void refreshAuthStatus();
       void refreshSyncStatus();
@@ -332,7 +344,7 @@ async function handleSubmit(event: Event): Promise<void> {
     translator: (form as SettingsFormElements).translator.value,
     useYoudaoDict: (form as SettingsFormElements).useYoudaoDict.checked,
     autoSpeak: (form as SettingsFormElements).autoSpeak.checked,
-    fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as "canvas" | "css" | "confetti" | "sparkle" | "ripple" | "emoji" | "hearts" | "none",
+    fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as FireworksEffect,
     maxCacheSize: clampNumber((form as SettingsFormElements).maxCacheSize.value, SETTINGS_LIMITS.CACHE_SIZE_MIN, SETTINGS_LIMITS.CACHE_SIZE_MAX, SETTINGS_LIMITS.CACHE_SIZE_DEFAULT),
     rememberDevice7Days: (form as SettingsFormElements).rememberDevice7Days.checked,
     recognizeLanguages: getSelectedLanguages(),
@@ -414,4 +426,11 @@ async function refreshSyncStatus(): Promise<void> {
 
 function setStatus(message: string): void {
   statusNode.textContent = message;
+}
+
+function previewFireworksEffect(effect: string): void {
+  if (effect === "none") return;
+  const api = (window as unknown as { __WordPickerFireworks?: { launchFireworks: (mode: string, x: number, y: number) => void } }).__WordPickerFireworks;
+  if (!api) return;
+  api.launchFireworks(effect, window.innerWidth / 2, window.innerHeight / 2);
 }
