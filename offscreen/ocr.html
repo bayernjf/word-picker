@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WordPicker OCR</title>
+  <!--
+    Tesseract worker is created with workerBlobURL: false, so spawnWorker
+    calls `new Worker(workerPath)` directly with the chrome-extension:// URL.
+    This satisfies worker-src 'self' and lets importScripts resolve 'self'
+    URLs inside the worker. No inline script override is needed (and inline
+    scripts are blocked by Manifest V3 CSP script-src 'self' anyway).
+  -->
+  <script src="../assets/tesseract/tesseract.min.js"></script>
+</head>
+<body>
+  <script src="ocr.js"></script>
+</body>
+</html>

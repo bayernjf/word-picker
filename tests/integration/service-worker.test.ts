@@ -74,6 +74,26 @@ describe("Service Worker Integration", () => {
       expect(words).toHaveLength(1);
       expect(words[0].word).toBe("book1-word");
     });
+
+    it("should persist source language for multi-language words", async () => {
+      await ensureDefaults();
+      const now = Date.now();
+      const result = await addWord({
+        word: "ありがとう",
+        frequency: 1,
+        translation: "谢谢",
+        timeAdded: now,
+        timeUpdated: now,
+        contexts: [],
+        bookId: "local_default_book",
+        sourceLang: "ja",
+      });
+      expect(result.success).toBe(true);
+      expect(result.entry.sourceLang).toBe("ja");
+
+      const words = await getWords();
+      expect(words[0].sourceLang).toBe("ja");
+    });
   });
 
   describe("Book Management", () => {

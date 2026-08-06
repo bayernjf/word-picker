@@ -6,7 +6,7 @@ import {
   clampNumber,
 } from "./utils.js";
 import { SETTINGS_LIMITS } from "./constants.js";
-import type { LookupKey } from "./constants.js";
+import type { LookupKey, FireworksEffect } from "./constants.js";
 import type { Book } from "./utils.js";
 
 export interface WordContext {
@@ -24,6 +24,8 @@ export interface Word {
   timeUpdated: number;
   contexts: WordContext[];
   bookId: string;
+  // 单词源语言（ISO 639-1，如 en/ja/ko/fr/es/de），由 detectWordLanguage 或用户手动覆盖得到
+  sourceLang?: string;
   phonetic?: string;
   exampleEn?: string;
   exampleZh?: string;
@@ -58,8 +60,9 @@ export interface Settings {
   maxCacheSize: number;
   syncEnabled: boolean;
   rememberDevice7Days: boolean;
-  fireworksEffect: "canvas" | "css" | "none";
+  fireworksEffect: FireworksEffect;
   logLevel: "debug" | "info" | "warn" | "error";
+  recognizeLanguages: string[];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -76,6 +79,7 @@ export const DEFAULT_SETTINGS: Settings = {
   rememberDevice7Days: false,
   fireworksEffect: "canvas",
   logLevel: "warn",
+  recognizeLanguages: ["en"],
 };
 
 const STORAGE_KEYS = {

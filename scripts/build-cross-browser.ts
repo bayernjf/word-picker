@@ -11,7 +11,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { copyStaticAssets, copyPolyfill } from "./copy-static.js";
+import { copyStaticAssets, copyPolyfill, copyTinySegmenter } from "./copy-static.js";
+import { buildTesseractAssets } from "./build-tesseract-assets.js";
 
 const ROOT = process.cwd();
 const SRC = path.join(ROOT, "dist", "extension");
@@ -248,7 +249,7 @@ function injectDynamicHostPermissions(merged: Record<string, unknown>): void {
   console.log(`[build-cross-browser] host_permissions: ${JSON.stringify(merged.host_permissions)}`);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   // Ensure dist/extension exists (TS compiled)
   if (!fs.existsSync(SRC)) {
     console.error("[build-cross-browser] dist/extension not found. Run build:ts first.");
@@ -284,6 +285,12 @@ function main(): void {
 
   // Copy browser polyfill for content scripts
   copyPolyfill();
+
+  // Copy Tesseract.js assets for OCR (WASM core + language data, fully local)
+  await buildTesseractAssets();
+
+  // Copy TinySegmenter for Japanese word segmentation
+  copyTinySegmenter();
 
   const target = process.argv[2] || "all";
 

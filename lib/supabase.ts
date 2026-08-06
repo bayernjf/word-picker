@@ -3,11 +3,6 @@ function readEnv(key: string): string | undefined {
     return process.env[key];
   }
 
-  const metaEnv = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
-  if (typeof import.meta !== 'undefined' && metaEnv) {
-    return metaEnv?.[key];
-  }
-
   return undefined;
 }
 
