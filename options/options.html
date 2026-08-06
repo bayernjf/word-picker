@@ -126,6 +126,12 @@
         </div>
 
         <div class="field">
+          <label>识别语言</label>
+          <div id="language-options" style="display:flex; flex-wrap:wrap; gap:16px;"></div>
+          <div id="language-hint" style="font-size:12px; color:#8b949e; margin-top:4px;"></div>
+        </div>
+
+        <div class="field">
           <label for="translator">翻译源</label>
           <select id="translator" name="translator">
             <option value="free">免费公开接口</option>
@@ -148,6 +154,11 @@
           <select id="fireworksEffect" name="fireworksEffect">
             <option value="canvas">烟花</option>
             <option value="css">粒子</option>
+            <option value="confetti">彩带</option>
+            <option value="sparkle">闪烁</option>
+            <option value="ripple">波纹</option>
+            <option value="emoji">表情</option>
+            <option value="hearts">爱心</option>
             <option value="none">关闭</option>
           </select>
         </div>
@@ -196,8 +207,10 @@
 
       <div id="status" aria-live="polite"></div>
       <div id="sync-status"></div>
+      <div id="version-info" style="margin-top:24px; font-size:12px; color:#484f58; text-align:center;"></div>
     </main>
 
+    <script src="../content/fireworks.js"></script>
     <script type="module" src="./options.js"></script>
   </body>
 </html>

@@ -3,6 +3,15 @@ import { escapeHtml, sendMessage, formatDate, formatSyncStatusSummary, selectPre
 import { createLogger } from "../lib/logger.js";
 import type { Book, SyncStatus } from "../lib/utils.js";
 
+declare const chrome: {
+  storage: {
+    onChanged: {
+      addListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+      removeListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+    };
+  };
+};
+
 const logger = createLogger("popup");
 
 const searchInput = document.getElementById("search-input") as HTMLInputElement;
@@ -11,6 +20,7 @@ const statusNode = document.getElementById("status") as HTMLDivElement;
 const syncStatusNode = document.getElementById("sync-status") as HTMLDivElement | null;
 const exportJsonButton = document.getElementById("export-json") as HTMLButtonElement;
 const exportCsvButton = document.getElementById("export-csv") as HTMLButtonElement;
+const exportAnkiButton = document.getElementById("export-anki") as HTMLButtonElement;
 const bookSelect = document.getElementById("book-select") as HTMLSelectElement;
 const refreshBooksButton = document.getElementById("refresh-books") as HTMLButtonElement;
 
@@ -42,7 +52,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindEvents();
 
   // 监听后台登录态变化（如 token 失效被清空），实时刷新界面
-  browser.storage.onChanged.addListener((changes, areaName) => {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes.authData) {
       void checkAuthAndRender();
     }
@@ -71,6 +81,10 @@ function bindEvents(): void {
 
   exportCsvButton.addEventListener("click", () => {
     exportWords("csv");
+  });
+
+  exportAnkiButton.addEventListener("click", () => {
+    exportWords("anki");
   });
 
   const openOptionsBtn = document.getElementById("open-options");
@@ -237,7 +251,7 @@ function renderError(message: string): void {
   setStatus("加载失败");
 }
 
-type ExportFormat = "json" | "csv";
+type ExportFormat = "json" | "csv" | "anki";
 
 async function exportWords(format: ExportFormat): Promise<void> {
   // 只导出当前展示的单词（单词本筛选或搜索结果），而非全部单词
@@ -251,7 +265,7 @@ async function exportWords(format: ExportFormat): Promise<void> {
       format,
       words: currentWords,
     });
-    downloadFile(response.fileName, response.data, format === "csv" ? "text/csv;charset=utf-8" : "application/json");
+    downloadFile(response.fileName, response.data, format === "csv" ? "text/csv;charset=utf-8" : format === "anki" ? "text/plain;charset=utf-8" : "application/json");
     setStatus(`已导出 ${format.toUpperCase()}（${currentWords.length} 条）`);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "导出失败");

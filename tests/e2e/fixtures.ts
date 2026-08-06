@@ -21,7 +21,8 @@ if (!TEST_EMAIL || !TEST_PASSWORD) {
 }
 
 export const test = base.extend<ExtensionFixture>({
-  context: async (_useArgs, use) => {
+  // eslint-disable-next-line no-empty-pattern
+  context: async ({}, use) => {
     const context = await chromium.launchPersistentContext('', {
       headless: false,
       args: [
@@ -49,17 +50,26 @@ export const test = base.extend<ExtensionFixture>({
     await optionsPage.goto(`chrome-extension://${extensionId}/options/options.html`);
     await optionsPage.waitForTimeout(2000);
 
-    // 输入邮箱和密码
-    await optionsPage.locator('#authEmail').fill(TEST_EMAIL);
-    await optionsPage.locator('#authPassword').fill(TEST_PASSWORD);
+    // 检查是否已经登录（之前测试可能已登录）
+    const authEmailVisible = await optionsPage.locator('#authEmail').isVisible().catch(() => false);
+    if (authEmailVisible) {
+      // 未登录，执行登录流程
+      await optionsPage.locator('#authEmail').fill(TEST_EMAIL);
+      await optionsPage.locator('#authPassword').fill(TEST_PASSWORD);
+      await optionsPage.locator('#auth-login').click();
 
-    // 点击登录按钮
-    await optionsPage.locator('#auth-login').click();
-    
-    // 等待登录成功（显示用户信息或已登录状态）
-    await optionsPage.locator('#auth-logged-in').waitFor({ state: 'visible', timeout: 10000 });
+      // 等待登录成功：优先等待 auth-logged-in 可见，fallback 等待成功提示文字
+      try {
+        await optionsPage.locator('#auth-logged-in').waitFor({ state: 'visible', timeout: 10000 });
+      } catch {
+        await optionsPage.locator('text=登录成功').waitFor({ state: 'visible', timeout: 10000 });
+        await optionsPage.waitForTimeout(3000);
+      }
+    }
+    // 已登录则直接使用
+
     await optionsPage.waitForTimeout(1000);
-    
+
     // 关闭设置页，登录状态已保存在 extension 中
     await optionsPage.close();
 

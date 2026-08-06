@@ -1,8 +1,17 @@
 import browser from "webextension-polyfill";
 import { sendMessage, clampNumber } from "../lib/utils.js";
-import { SETTINGS_LIMITS, detectPlatform } from "../lib/constants.js";
+import { SETTINGS_LIMITS, detectPlatform, SUPPORTED_LANGUAGES, type FireworksEffect } from "../lib/constants.js";
 import { createLogger } from "../lib/logger.js";
 import type { Settings, LookupKey, Platform } from "../lib/storage.js";
+
+declare const chrome: {
+  storage: {
+    onChanged: {
+      addListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+      removeListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+    };
+  };
+};
 
 const logger = createLogger("options");
 
@@ -17,6 +26,8 @@ const authLoggedOut = document.getElementById("auth-logged-out") as HTMLDivEleme
 const authLoggedIn = document.getElementById("auth-logged-in") as HTMLDivElement;
 const authUserInfo = document.getElementById("auth-user-info") as HTMLDivElement;
 const rememberDeviceCheckbox = document.getElementById("rememberDevice7Days") as HTMLInputElement | null;
+const languageOptionsContainer = document.getElementById("language-options") as HTMLDivElement | null;
+const languageHintNode = document.getElementById("language-hint") as HTMLDivElement | null;
 
 interface SettingsFormElements extends HTMLFormElement {
   lookupKey: HTMLSelectElement;
@@ -51,6 +62,18 @@ function getPlatformLookupKeyOptions() {
   return currentPlatform === "mac" ? LOOKUP_KEY_OPTIONS.mac : LOOKUP_KEY_OPTIONS.win;
 }
 
+function initLanguageOptions(): void {
+  if (!languageOptionsContainer) return;
+  languageOptionsContainer.innerHTML = SUPPORTED_LANGUAGES.map(lang => {
+    const disabled = lang.enabled ? "" : "disabled";
+    const note = lang.note ? ` <span style="color:#8b949e;font-size:12px;">(${lang.note})</span>` : "";
+    return `<label class="checkbox" style="font-weight:normal;">
+      <input type="checkbox" value="${lang.code}" ${disabled} />
+      ${lang.label}${note}
+    </label>`;
+  }).join("");
+}
+
 function initLookupKeySelect(): void {
   const select = (form as SettingsFormElements).lookupKey;
   const options = getPlatformLookupKeyOptions();
@@ -59,6 +82,7 @@ function initLookupKeySelect(): void {
 
 document.addEventListener("DOMContentLoaded", async () => {
   initLookupKeySelect();
+  initLanguageOptions();
   await loadSettings();
   form.addEventListener("submit", handleSubmit);
   syncNowButton?.addEventListener("click", handleSyncNow);
@@ -67,11 +91,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   authLogoutButton?.addEventListener("click", handleAuthLogout);
   rememberDeviceCheckbox?.addEventListener("change", handleRememberDeviceChange);
   (form as SettingsFormElements).lookupKey.addEventListener("change", () => void autoSaveSetting("lookupKey"));
-  (form as SettingsFormElements).fireworksEffect.addEventListener("change", () => void autoSaveSetting("fireworksEffect"));
+  (form as SettingsFormElements).fireworksEffect.addEventListener("change", () => {
+    void autoSaveSetting("fireworksEffect");
+    previewFireworksEffect((form as SettingsFormElements).fireworksEffect.value);
+  });
+  languageOptionsContainer?.addEventListener("change", (e) => {
+    if ((e.target as HTMLElement)?.tagName === "INPUT") {
+      void autoSaveSetting("recognizeLanguages");
+    }
+  });
   await refreshAuthStatus();
   await refreshSyncStatus();
 
-  browser.storage.onChanged.addListener((changes, areaName) => {
+  const versionEl = document.getElementById("version-info");
+  if (versionEl) {
+    const version = browser.runtime.getManifest().version;
+    versionEl.textContent = `WordPicker v${version}`;
+  }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes.authData) {
       void refreshAuthStatus();
       void refreshSyncStatus();
@@ -106,9 +144,34 @@ async function loadSettings(): Promise<void> {
     (form as SettingsFormElements).fireworksEffect.value = settings.fireworksEffect || "canvas";
     (form as SettingsFormElements).maxCacheSize.value = String(settings.maxCacheSize || 200);
     (form as SettingsFormElements).rememberDevice7Days.checked = Boolean(settings.rememberDevice7Days);
+    const savedLanguages = settings.recognizeLanguages || ["en"];
+    const checkboxes = languageOptionsContainer?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') || [];
+    checkboxes.forEach(cb => {
+      cb.checked = savedLanguages.includes(cb.value);
+    });
+    updateLanguageHint(savedLanguages);
   } catch (error) {
     setStatus(error instanceof Error ? error.message : "加载设置失败");
   }
+}
+
+function updateLanguageHint(languages: string[]): void {
+  if (!languageHintNode) return;
+  if (languages.length <= 1) {
+    languageHintNode.textContent = "";
+    return;
+  }
+  const labels = languages.map(code => {
+    const lang = SUPPORTED_LANGUAGES.find(l => l.code === code);
+    return lang?.label || code;
+  });
+  languageHintNode.textContent = `已启用：${labels.join("、")}。多语言模式下 OCR 识别可能较慢。`;
+}
+
+function getSelectedLanguages(): string[] {
+  const checkboxes = languageOptionsContainer?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked') || [];
+  const languages = Array.from(checkboxes).map(cb => cb.value).filter(v => v.length > 0);
+  return languages.length > 0 ? languages : ["en"];
 }
 
 async function refreshAuthStatus(): Promise<void> {
@@ -228,9 +291,10 @@ async function handleRememberDeviceChange(): Promise<void> {
 const SETTING_LABELS: Record<string, string> = {
   lookupKey: "查词按键",
   fireworksEffect: "添加单词特效",
+  recognizeLanguages: "识别语言",
 };
 
-async function autoSaveSetting(key: "lookupKey" | "fireworksEffect"): Promise<void> {
+async function autoSaveSetting(key: "lookupKey" | "fireworksEffect" | "recognizeLanguages"): Promise<void> {
   try {
     const response = await sendMessage({ type: "GET_SETTINGS" });
     const current: Partial<Settings> = response.settings || {};
@@ -245,6 +309,10 @@ async function autoSaveSetting(key: "lookupKey" | "fireworksEffect"): Promise<vo
           [currentPlatform]: newValue,
         },
       };
+    } else if (key === "recognizeLanguages") {
+      const checkboxes = languageOptionsContainer?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]:checked') || [];
+      const languages = Array.from(checkboxes).map(cb => cb.value).filter(v => v.length > 0);
+      patch = { recognizeLanguages: languages.length > 0 ? languages : ["en"] };
     } else {
       patch = { fireworksEffect: formEl.fireworksEffect.value as Settings["fireworksEffect"] };
     }
@@ -276,9 +344,10 @@ async function handleSubmit(event: Event): Promise<void> {
     translator: (form as SettingsFormElements).translator.value,
     useYoudaoDict: (form as SettingsFormElements).useYoudaoDict.checked,
     autoSpeak: (form as SettingsFormElements).autoSpeak.checked,
-    fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as "canvas" | "css" | "none",
+    fireworksEffect: (form as SettingsFormElements).fireworksEffect.value as FireworksEffect,
     maxCacheSize: clampNumber((form as SettingsFormElements).maxCacheSize.value, SETTINGS_LIMITS.CACHE_SIZE_MIN, SETTINGS_LIMITS.CACHE_SIZE_MAX, SETTINGS_LIMITS.CACHE_SIZE_DEFAULT),
     rememberDevice7Days: (form as SettingsFormElements).rememberDevice7Days.checked,
+    recognizeLanguages: getSelectedLanguages(),
   };
 
   try {
@@ -357,4 +426,11 @@ async function refreshSyncStatus(): Promise<void> {
 
 function setStatus(message: string): void {
   statusNode.textContent = message;
+}
+
+function previewFireworksEffect(effect: string): void {
+  if (effect === "none") return;
+  const api = (window as unknown as { __WordPickerFireworks?: { launchFireworks: (mode: string, x: number, y: number) => void } }).__WordPickerFireworks;
+  if (!api) return;
+  api.launchFireworks(effect, window.innerWidth / 2, window.innerHeight / 2);
 }

@@ -7,10 +7,10 @@ const __dirname = path.dirname(__filename);
 const testPageUrl = 'file://' + path.resolve(__dirname, 'test-page.html');
 
 test.describe('Export Functionality', () => {
-  test('export buttons should exist in popup', async ({ context, extensionId, page }) => {
+  test('export buttons should exist in popup', async ({ loggedInContext, extensionId, page }) => {
     await page.goto(testPageUrl);
 
-    const popupPage = await context.newPage();
+    const popupPage = await loggedInContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
     await popupPage.waitForTimeout(1500);
 
@@ -19,10 +19,10 @@ test.describe('Export Functionality', () => {
     await expect(popupPage.locator('#export-csv')).toBeVisible();
   });
 
-  test('should export words as JSON', async ({ context, extensionId, page }) => {
+  test('should export words as JSON', async ({ loggedInContext, extensionId, page }) => {
     await page.goto(testPageUrl);
 
-    const popupPage = await context.newPage();
+    const popupPage = await loggedInContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
     await popupPage.waitForTimeout(1500);
 
@@ -35,10 +35,10 @@ test.describe('Export Functionality', () => {
     }
   });
 
-  test('should export words as CSV', async ({ context, extensionId, page }) => {
+  test('should export words as CSV', async ({ loggedInContext, extensionId, page }) => {
     await page.goto(testPageUrl);
 
-    const popupPage = await context.newPage();
+    const popupPage = await loggedInContext.newPage();
     await popupPage.goto(`chrome-extension://${extensionId}/popup/popup.html`);
     await popupPage.waitForTimeout(1500);
 

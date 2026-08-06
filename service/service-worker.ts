@@ -27,6 +27,7 @@ import {
 } from '../lib/utils.js';
 import { QUEUE_MAX_LENGTH, DEFAULT_SYNC_BASE_URL } from '../lib/constants.js';
 import { MESSAGE_TYPES, isKnownMessageType } from '../lib/messaging.js';
+import { mapLocalWordToServer, type ServerWordPayload } from '../lib/syncPayload.js';
 import { createLogger, setLogLevel } from '../lib/logger.js';
 import {
   setSupabaseSession,
@@ -38,6 +39,34 @@ import {
 } from '../lib/supabase.js';
 import type { TranslationResult } from '../lib/translator.js';
 import type { OfflineTranslationResult } from '../lib/offlineDict.js';
+
+interface OcrPort {
+  name: string;
+  postMessage(msg: unknown): void;
+  onMessage: { addListener(cb: (msg: unknown) => void): void; removeListener(cb: (msg: unknown) => void): void };
+  onDisconnect: { addListener(cb: () => void): void };
+  disconnect(): void;
+}
+
+declare const chrome: {
+  offscreen: {
+    createDocument(options: { url: string; reasons: string[]; justification: string }): Promise<void>;
+    closeDocument(): Promise<void>;
+    hasDocument(): Promise<boolean>;
+    Reason: Record<string, string>;
+  };
+  runtime: {
+    sendMessage(message: unknown, callback: (response: unknown) => void): void;
+    connect(connectInfo?: { name?: string }): OcrPort;
+    lastError: { message: string } | undefined;
+  };
+  storage: {
+    onChanged: {
+      addListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+      removeListener(listener: (changes: { [key: string]: { oldValue?: unknown; newValue?: unknown } }, areaName: string) => void): void;
+    };
+  };
+};
 
 const logger = createLogger('service-worker');
 
@@ -157,25 +186,45 @@ browser.runtime.onStartup.addListener(() => {
   initializeOnAwake();
 });
 
-browser.storage.onChanged.addListener((changes, area) => {
+let settingsPushTimer: ReturnType<typeof setTimeout> | null = null;
+
+chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'local' || !changes.settings) return;
   const newSettings = changes.settings.newValue as Partial<Settings> | undefined;
   if (newSettings?.logLevel) {
     setLogLevel(newSettings.logLevel);
   }
+  if (settingsPushTimer) clearTimeout(settingsPushTimer);
+  settingsPushTimer = setTimeout(() => {
+    settingsPushTimer = null;
+    pushSettingsToServer().catch(() => {});
+  }, 2000);
 });
 
 browser.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== 'sync-words') return;
-  try {
-    const settings = await getSettings();
-    await flushSyncQueue(settings);
-  } catch (err) {
-    logger.error('[onAlarm] sync failed', { error: err instanceof Error ? err.message : String(err) });
+  if (alarm.name === 'sync-words') {
+    try {
+      const settings = await getSettings();
+      await flushSyncQueue(settings);
+    } catch (err) {
+      logger.error('[onAlarm] sync failed', { error: err instanceof Error ? err.message : String(err) });
+    }
+    return;
+  }
+  if (alarm.name === 'review-reminder') {
+    try {
+      await checkReviewReminder();
+    } catch (err) {
+      logger.error('[onAlarm] review-reminder failed', { error: err instanceof Error ? err.message : String(err) });
+    }
   }
 });
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  const msg = message as Message;
+  if (msg?.type === 'OCR_PROCESS' || msg?.type === 'PING') {
+    return false as true;
+  }
   const safeSendResponse = (data: unknown): void => {
     try {
       sendResponse(data as never);
@@ -183,7 +232,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // port closed, ignore
     }
   };
-  handleMessage(message as Message, sender)
+  handleMessage(msg, sender)
     .then((payload) => safeSendResponse({ success: true, ...(payload as object) }))
     .catch((error) => {
       safeSendResponse({
@@ -204,7 +253,11 @@ async function handleMessage(message: Message, sender?: browser.Runtime.MessageS
   await ensureDefaults();
   logger.debug('handleMessage', { type: message?.type });
 
-  if (!message?.type || !isKnownMessageType(message.type)) {
+  if (!message?.type) {
+    throw new Error(`unknown_message_type`);
+  }
+
+  if (!isKnownMessageType(message.type)) {
     throw new Error(`unknown_message_type`);
   }
 
@@ -248,7 +301,11 @@ async function handleMessage(message: Message, sender?: browser.Runtime.MessageS
       }
       return handleAuthGetCredentials();
     case MESSAGE_TYPES.TRANSLATE:
-      return handleTranslate(message.word as string);
+      return handleTranslate(message.word as string, message.sourceLang as string | undefined);
+    case MESSAGE_TYPES.IMAGE_OCR:
+      return handleImageOcr(message.imageUrl as string);
+    case MESSAGE_TYPES.SYNC_SETTINGS:
+      return handleSyncSettings();
     case MESSAGE_TYPES.PING:
       return { pong: true };
     default:
@@ -301,34 +358,11 @@ interface ServerWord {
   level?: string;
   familiarity?: number;
   sync_version?: number;
+  source_language?: string;
   meta?: {
     sourceUrl?: string;
     sourceTitle?: string;
     createdAt?: number;
-  };
-}
-
-interface ServerWordPayload {
-  word: string;
-  frequency: number;
-  translation: string;
-  time_added: string;
-  time_updated: string;
-  contexts: Word['contexts'];
-  phonetic: string;
-  part_of_speech: string;
-  definition: string;
-  chinese_translation: string;
-  synonyms: string[];
-  examples: Array<{ en: string; zh: string }>;
-  usage_history: unknown[];
-  level: string;
-  familiarity: number;
-  book_id?: string;
-  meta: {
-    sourceUrl: string;
-    sourceTitle: string;
-    createdAt: number;
   };
 }
 
@@ -491,6 +525,14 @@ async function handleExportWords(format: string, words: Word[]): Promise<{
     };
   }
 
+  if (normalized === 'anki') {
+    return {
+      format: 'anki',
+      fileName: 'wordpicker-words-anki.txt',
+      data: toAnki(words),
+    };
+  }
+
   return {
     format: 'json',
     fileName: 'wordpicker-words.json',
@@ -529,8 +571,86 @@ function csvEscape(value: unknown): string {
   return `"${text}"`;
 }
 
+function toAnki(words: Word[]): string {
+  return words.map((word) => {
+    const front = word.word;
+    const phonetic = word.phonetic || word._legacy?.phonetic || '';
+    const meaning = word.translation || word._legacy?.meaning || '';
+    const exampleEn = word.exampleEn || word._legacy?.exampleEn || '';
+    const exampleZh = word.exampleZh || word._legacy?.exampleZh || '';
+    const contexts = (word.contexts || []).map((c) => c.context).filter(Boolean).join('<br>');
+    const back = [
+      phonetic ? `<i>${phonetic}</i>` : '',
+      meaning ? `<div>${meaning}</div>` : '',
+      exampleEn ? `<div class="example">${exampleEn}</div>` : '',
+      exampleZh ? `<div class="example">${exampleZh}</div>` : '',
+      contexts ? `<div class="contexts">${contexts}</div>` : '',
+    ].filter(Boolean).join('');
+    return `${front}\t${back}`;
+  }).join('\n');
+}
+
 async function handleSyncNow(): Promise<FlushResult> {
+  await pushSettingsToServer().catch(() => {});
+  await pullSettingsFromServer().catch(() => {});
   return flushSyncQueue(await getSettings(), true);
+}
+
+const SYNCABLE_SETTING_KEYS: (keyof Settings)[] = [
+  'lookupKeys', 'hoverDelay', 'translator', 'useYoudaoDict',
+  'autoSpeak', 'maxCacheSize', 'fireworksEffect', 'recognizeLanguages',
+];
+
+function extractSyncableSettings(settings: Settings): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key of SYNCABLE_SETTING_KEYS) {
+    result[key] = settings[key];
+  }
+  return result;
+}
+
+async function pushSettingsToServer(): Promise<void> {
+  const auth = await getAuthData();
+  if (!auth?.accessToken || isAuthExpired(auth)) return;
+  const settings = await getSettings();
+  if (settings.syncEnabled === false) return;
+  const syncable = extractSyncableSettings(settings);
+  await fetchSyncJson(`${DEFAULT_SYNC_BASE_URL}/api/v1/settings`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${auth.accessToken}`,
+    },
+    body: JSON.stringify({ settings: syncable }),
+  });
+  logger.debug('[pushSettingsToServer] done');
+}
+
+async function pullSettingsFromServer(): Promise<void> {
+  const auth = await getAuthData();
+  if (!auth?.accessToken || isAuthExpired(auth)) return;
+  const settings = await getSettings();
+  if (settings.syncEnabled === false) return;
+  const result = await fetchSyncJson(`${DEFAULT_SYNC_BASE_URL}/api/v1/settings`, {
+    headers: { Authorization: `Bearer ${auth.accessToken}` },
+  }) as { settings: Record<string, unknown> | null; updatedAt?: string };
+  if (!result?.settings) return;
+  const patch: Record<string, unknown> = {};
+  for (const key of SYNCABLE_SETTING_KEYS) {
+    if (key in result.settings) {
+      patch[key] = result.settings[key];
+    }
+  }
+  if (Object.keys(patch).length > 0) {
+    await saveSettings(patch as Partial<Settings>);
+    logger.debug('[pullSettingsFromServer] merged', { keys: Object.keys(patch) });
+  }
+}
+
+async function handleSyncSettings(): Promise<{ ok: boolean }> {
+  await pushSettingsToServer();
+  await pullSettingsFromServer();
+  return { ok: true };
 }
 
 interface SyncStatusResult {
@@ -565,6 +685,59 @@ async function setupAlarms(): Promise<void> {
   const existing = await browser.alarms.get('sync-words');
   if (!existing) {
     await browser.alarms.create('sync-words', { periodInMinutes: 3 });
+  }
+  const reviewExisting = await browser.alarms.get('review-reminder');
+  if (!reviewExisting) {
+    await browser.alarms.create('review-reminder', { periodInMinutes: 60 });
+  }
+}
+
+const REVIEW_INTERVALS_MS = [
+  1 * 24 * 60 * 60 * 1000,
+  3 * 24 * 60 * 60 * 1000,
+  7 * 24 * 60 * 60 * 1000,
+  14 * 24 * 60 * 60 * 1000,
+  30 * 24 * 60 * 60 * 1000,
+];
+
+async function checkReviewReminder(): Promise<void> {
+  const settings = await getSettings();
+  if (settings.syncEnabled === false) return;
+
+  const words = await getWords();
+  if (words.length === 0) return;
+
+  const now = Date.now();
+  let dueCount = 0;
+
+  for (const word of words) {
+    const addedAt = word.timeAdded || word._legacy?.createdAt || 0;
+    if (!addedAt) continue;
+    const age = now - addedAt;
+    const dueInterval = REVIEW_INTERVALS_MS[Math.min(word.frequency || 1, REVIEW_INTERVALS_MS.length) - 1] || REVIEW_INTERVALS_MS[0];
+    if (age >= dueInterval) {
+      const timeUpdated = word.timeUpdated || addedAt;
+      const timeSinceReview = now - timeUpdated;
+      if (timeSinceReview >= dueInterval) {
+        dueCount++;
+      }
+    }
+  }
+
+  if (dueCount === 0) return;
+
+  try {
+    const permission = await browser.permissions.contains({ permissions: ['notifications'] });
+    if (!permission) return;
+
+    await browser.notifications.create('review-reminder', {
+      type: 'basic',
+      iconUrl: browser.runtime.getURL('assets/icons/icon128.png'),
+      title: 'WordPicker \u590d\u4e60\u63d0\u9192',
+      message: `\u4f60\u6709 ${dueCount} \u4e2a\u5355\u8bcd\u5f85\u590d\u4e60\uff0c\u6253\u5f00\u5f39\u7a97\u5f00\u59cb\u590d\u4e60\u5427\uff01`,
+    });
+  } catch (err) {
+    logger.warn('[checkReviewReminder] notification failed', { error: err instanceof Error ? err.message : String(err) });
   }
 }
 
@@ -765,6 +938,7 @@ function mapServerWordToLocal(word: ServerWord): Word {
     timeUpdated,
     contexts: Array.isArray(word.contexts) ? word.contexts : [],
     bookId: word.book_id || '',
+    sourceLang: word.source_language,
     _legacy: {
       id: word.id,
       phonetic: word.phonetic || '',
@@ -778,41 +952,8 @@ function mapServerWordToLocal(word: ServerWord): Word {
   };
 }
 
-function mapLocalWordToServer(word: Word): ServerWordPayload {
-  const timeAdded = word.timeAdded || word._legacy?.createdAt || Date.now();
-  const timeUpdated = word.timeUpdated || timeAdded;
-  return {
-    word: word.word,
-    frequency: word.frequency || Math.max((word.contexts || []).length || 0, 1),
-    translation: word.translation || '',
-    time_added: new Date(timeAdded).toISOString(),
-    time_updated: new Date(timeUpdated).toISOString(),
-    contexts: Array.isArray(word.contexts) ? word.contexts : [],
-    phonetic: word._legacy?.phonetic || '',
-    part_of_speech: '',
-    definition: '',
-    chinese_translation: word.translation || '',
-    synonyms: [],
-    examples:
-      word._legacy?.exampleEn || word._legacy?.exampleZh
-        ? [
-            {
-              en: word._legacy?.exampleEn || '',
-              zh: word._legacy?.exampleZh || '',
-            },
-          ]
-        : [],
-    usage_history: [],
-    level: 'B2',
-    familiarity: 0,
-    book_id: word.bookId,
-    meta: {
-      sourceUrl: word._legacy?.sourceUrl || '',
-      sourceTitle: word._legacy?.sourceTitle || '',
-      createdAt: timeAdded,
-    },
-  };
-}
+const MIN_VALID_BOOK_ID_LENGTH = 10;
+const SKIP_LOCAL_PLACEHOLDER_BOOK_ID_LENGTH = 20;
 
 async function pushDeletes(auth: AuthData): Promise<{ ok: boolean; processed: number }> {
   const deleteQueue = await getDeleteQueue();
@@ -880,10 +1021,10 @@ async function pushWords(auth: AuthData): Promise<{ ok: boolean; processed: numb
   syncQueue.forEach((item) => {
     const mapped = mapLocalWordToServer(item);
     const bookId = mapped.book_id;
-    if ((!bookId || bookId === 'local_default_book' || bookId.length < 10) && syncBook) {
+    if ((!bookId || bookId === 'local_default_book' || bookId.length < MIN_VALID_BOOK_ID_LENGTH) && syncBook) {
       mapped.book_id = syncBook.id;
     }
-    if (typeof mapped.book_id !== 'string' || mapped.book_id.length <= 20) {
+    if (typeof mapped.book_id !== 'string' || mapped.book_id.length <= SKIP_LOCAL_PLACEHOLDER_BOOK_ID_LENGTH) {
       return;
     }
 
@@ -899,6 +1040,8 @@ async function pushWords(auth: AuthData): Promise<{ ok: boolean; processed: numb
       mapped.usage_history = Array.isArray(existingServerWord.usage_history) ? existingServerWord.usage_history : mapped.usage_history;
       mapped.level = existingServerWord.level || mapped.level;
       mapped.familiarity = Number(existingServerWord.familiarity) || 0;
+      // 保留服务端已有的源语言，避免本地默认 'en' 把真实语言覆盖掉
+      mapped.source_language = existingServerWord.source_language || mapped.source_language;
       (mapped as ServerWordPayload & { sync_version?: number }).sync_version = Number(existingServerWord.sync_version) || 0;
     }
 
@@ -1193,7 +1336,7 @@ async function getRememberedCredentials(): Promise<{ email: string; password?: s
   };
 }
 
-async function saveRememberedCredentials(email: string, _password: string, remember: boolean): Promise<void> {
+async function saveRememberedCredentials(email: string, remember: boolean): Promise<void> {
   if (remember) {
     await browser.storage.local.set({
       [STORAGE_REMEMBERED_CREDENTIALS]: {
@@ -1207,14 +1350,14 @@ async function saveRememberedCredentials(email: string, _password: string, remem
 }
 
 function isAuthExpired(auth: AuthData): boolean {
-  return typeof auth.expiresAt === 'number' && Date.now() > auth.expiresAt;
+  return typeof auth.expiresAt === 'number' && Date.now() > auth.expiresAt * 1000;
 }
 
 const TOKEN_REFRESH_LEAD_MS = 5 * 60 * 1000;
 
 function isAuthExpiringSoon(auth: AuthData): boolean {
   if (typeof auth.expiresAt !== 'number') return false;
-  return Date.now() + TOKEN_REFRESH_LEAD_MS > auth.expiresAt;
+  return Date.now() + TOKEN_REFRESH_LEAD_MS > auth.expiresAt * 1000;
 }
 
 // 勾选/取消“在此设备记住7天”时，管理登录凭证的保存
@@ -1227,7 +1370,7 @@ async function handleAuthSetRemember(remember: boolean): Promise<{ ok: boolean }
   if (remember) {
     const credentials = await getRememberedCredentials();
     if (credentials?.email) {
-      await saveRememberedCredentials(credentials.email, credentials.password || '', true);
+      await saveRememberedCredentials(credentials.email, true);
     }
   } else {
     await browser.storage.local.remove([STORAGE_REMEMBERED_CREDENTIALS]);
@@ -1308,10 +1451,13 @@ async function handleAuthLogin(email: string, password: string): Promise<AuthRes
     lastSyncAt: Date.now(),
     expiresAt: session.expires_at || null,
   });
-  await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
+  await saveRememberedCredentials(email, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
   flushSyncQueue(settings, true).catch((err) => {
     logger.warn('[handleAuthLogin] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
+  });
+  pullSettingsFromServer().catch((err) => {
+    logger.warn('[handleAuthLogin] pullSettingsFromServer failed', { error: err instanceof Error ? err.message : String(err) });
   });
 
   return {
@@ -1343,7 +1489,7 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
     lastSyncAt: Date.now(),
     expiresAt: session.expires_at || null,
   });
-  await saveRememberedCredentials(email, password, Boolean(settings.rememberDevice7Days));
+  await saveRememberedCredentials(email, Boolean(settings.rememberDevice7Days));
   await setupAlarms();
 
   try {
@@ -1354,6 +1500,9 @@ async function handleAuthRegister(email: string, password: string): Promise<Auth
 
   flushSyncQueue(settings, true).catch((err) => {
     logger.warn('[handleAuthRegister] flushSyncQueue failed', { error: err instanceof Error ? err.message : String(err) });
+  });
+  pushSettingsToServer().catch((err) => {
+    logger.warn('[handleAuthRegister] pushSettingsToServer failed', { error: err instanceof Error ? err.message : String(err) });
   });
 
   return {
@@ -1377,17 +1526,11 @@ async function handleAuthLogout(): Promise<{ ok: boolean }> {
   }
   try {
     await browser.alarms.clear('sync-words');
+    await browser.alarms.clear('review-reminder');
   } catch (err) {
     logger.warn('[handleAuthLogout] clear alarm failed', { error: err instanceof Error ? err.message : String(err) });
   }
-  await setAuthData(null);
-  await setCurrentUserEmail(null);
   await clearUserData();
-  try {
-    await browser.storage.local.remove(['deviceId']);
-  } catch (err) {
-    logger.warn('[handleAuthLogout] remove deviceId failed', { error: err instanceof Error ? err.message : String(err) });
-  }
   return { ok: true };
 }
 
@@ -1413,11 +1556,181 @@ async function handleAuthStatus(): Promise<AuthStatusResult> {
   };
 }
 
-async function handleTranslate(word: string): Promise<{ translation: TranslationResult | OfflineTranslationResult; fromCache?: boolean; fromOffline?: boolean }> {
+const OFFSCREEN_URL = 'offscreen/ocr.html';
+const OFFSCREEN_IDLE_TIMEOUT_MS = 300_000;
+const OCR_PORT_NAME = 'wordpicker-ocr';
+
+let offscreenCreated = false;
+let offscreenIdleTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function ensureOffscreenDocument(): Promise<void> {
+  if (offscreenCreated) {
+    resetOffscreenIdleTimer();
+    return;
+  }
+
+  logger.info('ensureOffscreenDocument: creating offscreen document');
+  try {
+    const exists = await chrome.offscreen.hasDocument().catch(() => false);
+    if (!exists) {
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_URL,
+        reasons: [chrome.offscreen.Reason.WORKERS || 'WORKERS'],
+        justification: 'OCR image text recognition using Tesseract.js',
+      });
+      logger.info('ensureOffscreenDocument: offscreen document created');
+    } else {
+      logger.info('ensureOffscreenDocument: offscreen document already exists');
+    }
+  } catch (e) {
+    if (String(e).includes('only a single offscreen')) {
+      logger.warn('ensureOffscreenDocument: offscreen document already exists (by error)', e);
+    } else {
+      logger.error('ensureOffscreenDocument: failed to create offscreen document', e);
+      throw e;
+    }
+  }
+
+  offscreenCreated = true;
+  resetOffscreenIdleTimer();
+}
+
+async function teardownOffscreenDocument(): Promise<void> {
+  offscreenCreated = false;
+  if (offscreenIdleTimer) {
+    clearTimeout(offscreenIdleTimer);
+    offscreenIdleTimer = null;
+  }
+  try { await chrome.offscreen.closeDocument?.(); } catch { /* already gone */ }
+}
+
+function resetOffscreenIdleTimer(): void {
+  if (offscreenIdleTimer) {
+    clearTimeout(offscreenIdleTimer);
+  }
+  offscreenIdleTimer = setTimeout(() => {
+    chrome.offscreen.closeDocument?.().catch(() => {});
+    offscreenCreated = false;
+    offscreenIdleTimer = null;
+  }, OFFSCREEN_IDLE_TIMEOUT_MS);
+}
+
+async function handleImageOcr(imageUrl: string): Promise<{
+  words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
+  imageWidth: number;
+  imageHeight: number;
+}> {
+  if (!imageUrl) {
+    throw new Error('image_url_required');
+  }
+
+  const settings = await getSettings();
+  const langMap: Record<string, string> = { en: 'eng', fr: 'fra', es: 'spa', de: 'deu', ko: 'kor', ja: 'jpn' };
+  const ocrLanguages = (settings.recognizeLanguages || ['en'])
+    .map(code => langMap[code] || 'eng')
+    .filter((v, i, a) => a.indexOf(v) === i);
+
+  let imageData: string;
+  if (imageUrl.startsWith('data:')) {
+    imageData = imageUrl;
+  } else {
+    const response = await fetch(imageUrl);
+    if (!response.ok) {
+      throw new Error(`fetch_image_failed: HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    imageData = await blobToBase64(blob);
+  }
+
+  if (typeof chrome === 'undefined' || !chrome.offscreen) {
+    throw new Error('ocr_unsupported_platform');
+  }
+
+  await ensureOffscreenDocument();
+
+  const OCR_TIMEOUT_MS = 30_000;
+  const MAX_OCR_RETRIES = 3;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MAX_OCR_RETRIES; attempt++) {
+    logger.info(`handleImageOcr: attempt ${attempt + 1}/${MAX_OCR_RETRIES}`);
+    try {
+      const response = await new Promise<Record<string, unknown>>((resolve, reject) => {
+        let settled = false;
+        try {
+          const port = chrome.runtime.connect({ name: OCR_PORT_NAME });
+
+          const timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            port.disconnect();
+            reject(new Error('ocr_timeout'));
+          }, OCR_TIMEOUT_MS);
+
+          port.onDisconnect.addListener(() => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+            }
+          });
+
+          port.onMessage.addListener((resp: unknown) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            port.disconnect();
+            resolve((resp || {}) as Record<string, unknown>);
+          });
+
+          port.postMessage({ type: 'OCR_PROCESS', id: crypto.randomUUID?.() || String(Date.now()), imageData, languages: ocrLanguages });
+        } catch (e) {
+          if (settled) return;
+          settled = true;
+          reject(e instanceof Error ? e : new Error(String(e)));
+        }
+      });
+
+      if (response.error) {
+        throw new Error(String(response.error));
+      }
+
+      return {
+        words: (response.words as Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>) || [],
+        imageWidth: Number(response.imageWidth) || 0,
+        imageHeight: Number(response.imageHeight) || 0,
+      };
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error(String(e));
+      logger.warn(`handleImageOcr: attempt ${attempt + 1} failed`, lastError.message);
+      if (attempt < MAX_OCR_RETRIES - 1) {
+        await teardownOffscreenDocument();
+        await new Promise(r => setTimeout(r, 300));
+        await ensureOffscreenDocument();
+      }
+    }
+  }
+
+  logger.error('handleImageOcr: all attempts failed', lastError?.message);
+  throw lastError || new Error('ocr_connect_failed');
+}
+
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('blob_to_base64_failed'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function handleTranslate(word: string, sourceLang?: string): Promise<{ translation: TranslationResult | OfflineTranslationResult; fromCache?: boolean; fromOffline?: boolean }> {
   if (!word || !word.trim()) {
     throw new Error('待翻译单词不能为空');
   }
   const settings = await getSettings();
+  const lang = sourceLang || 'en';
 
   // 1. 先查缓存，命中直接返回（0 网络，秒回）
   const cached = await getCachedTranslation(word);
@@ -1431,6 +1744,7 @@ async function handleTranslate(word: string): Promise<{ translation: Translation
         exampleZh: cached.exampleZh || "",
         note: cached.note || "",
         provider: cached.provider,
+        audio: cached.audio || "",
       },
       fromCache: true,
     };
@@ -1445,7 +1759,7 @@ async function handleTranslate(word: string): Promise<{ translation: Translation
   }
 
   // 3. 仍未命中才走网络翻译（生僻词/词组兜底）
-  const translation = await translateWord(word, settings);
+  const translation = await translateWord(word, settings, lang);
 
   // 4. 写回缓存（仅缓存有效结果，兜底结果不缓存以便后续重试）
   if (translation && translation.provider !== 'fallback') {

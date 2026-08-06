@@ -10,6 +10,7 @@
   "include": [
     "./content/**/*.ts",
     "./lib/**/*.ts",
+    "./offscreen/**/*.ts",
     "./options/**/*.ts",
     "./popup/**/*.ts",
     "./service/**/*.ts"

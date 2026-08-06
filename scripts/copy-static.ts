@@ -13,6 +13,7 @@ const STATIC_FILES = [
   'popup/popup.html',
   'popup/popup.css',
   'options/options.html',
+  'offscreen/ocr.html',
 ];
 
 const STATIC_DIRS = ['assets'];
@@ -54,8 +55,25 @@ export function copyPolyfill(): void {
   console.log('[copy-static] browser-polyfill.js → content/');
 }
 
+export function copyTinySegmenter(): void {
+  const src = path.join(ROOT, 'node_modules', 'tiny-segmenter', 'lib', 'index.js');
+  const dest = path.join(DIST, 'content', 'tiny-segmenter.js');
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+
+  if (!fs.existsSync(src)) {
+    console.warn('[copy-static] Missing tiny-segmenter');
+    return;
+  }
+
+  let content = fs.readFileSync(src, 'utf-8');
+  content = content.replace('module.exports = TinySegmenter;', 'window.TinySegmenter = TinySegmenter;');
+  fs.writeFileSync(dest, content, 'utf-8');
+  console.log('[copy-static] tiny-segmenter.js → content/');
+}
+
 // 直接运行（非被导入时）
 const isMainModule = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/^\.[/\\]/, ''));
 if (isMainModule) {
   copyStaticAssets();
+  copyTinySegmenter();
 }

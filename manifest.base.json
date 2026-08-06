@@ -14,12 +14,16 @@
   },
   "permissions": [
     "storage",
-    "alarms"
+    "alarms",
+    "offscreen",
+    "notifications"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://api.dictionaryapi.dev/*",
     "https://api.mymemory.translated.net/*",
-    "https://dict.youdao.com/*"
+    "https://dict.youdao.com/*",
+    "https://en.wiktionary.org/*"
   ],
   "content_scripts": [
     {
@@ -30,6 +34,7 @@
         "content/browser-polyfill.js",
         "content/shared.js",
         "content/fireworks.js",
+        "content/tiny-segmenter.js",
         "content/content-script.js"
       ],
       "run_at": "document_idle",
@@ -51,6 +56,6 @@
     "open_in_tab": true
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; base-uri 'self'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; object-src 'self'; base-uri 'self'"
   }
 }

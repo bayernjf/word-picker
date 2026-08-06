@@ -1,6 +1,6 @@
 interface SharedAPI {
   escapeHtml: (value: unknown) => string;
-  sendMessage: (message: object) => Promise<{ success?: boolean; error?: string; [key: string]: unknown }>;
+  sendMessage: (message: object, timeoutMs?: number) => Promise<{ success?: boolean; error?: string; [key: string]: unknown }>;
   createLogger: (namespace: string) => { debug: (...args: unknown[]) => void; info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
 }
 
@@ -27,49 +27,166 @@ function getFireworksAPI(): FireworksAPI {
     PEN: "pen",
     LOADING: "loading",
     SHOWING: "showing",
+    OCR_LOADING: "ocr_loading",
+    IMAGE_OVERLAY: "image_overlay",
   } as const;
 
   type State = typeof STATE[keyof typeof STATE];
 
   type LookupKey = "Control" | "Meta" | "Alt" | "Shift";
-  type Platform = "mac" | "win";
+  type FireworksEffect = "canvas" | "css" | "confetti" | "sparkle" | "ripple" | "emoji" | "hearts" | "none";
 
-  function detectPlatform(): Platform {
+  function detectPlatform(): "mac" | "win" {
     if (typeof navigator !== "undefined" && navigator.platform) {
       return /Mac|iPod|iPhone|iPad/.test(navigator.platform) ? "mac" : "win";
     }
     return "win";
   }
 
-  const currentPlatform: Platform = detectPlatform();
+  function isSafari(): boolean {
+    if (typeof navigator === "undefined") return false;
+    const ua = navigator.userAgent;
+    return /Safari\//.test(ua) && !/Chrome|CriOS|Edg\//.test(ua);
+  }
 
   interface PerPlatformLookupKeys {
     mac: LookupKey;
     win: LookupKey;
   }
 
+  const DEFAULT_LOOKUP_KEY: LookupKey = "Control";
+
+  // 图片识别（OCR）功能总开关。当前为临时隐藏状态：基础实现已完成，
+  // 但因真实网页实测（跨域/动态图片/识别精度）尚未充分验证，先关闭用户入口。
+  // 设为 true 即可恢复悬停图片取词，后端 IMAGE_OCR 处理器与 offscreen 代码保持可用。
+  const IMAGE_OCR_ENABLED = false;
+
+  const LANGUAGE_WORD_PATTERNS: Record<string, string> = {
+    en: "[A-Za-z][A-Za-z'-]{1,44}",
+    fr: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
+    es: "[A-Za-z\u00C0-\u00FF\u00D1\u00F1][A-Za-z\u00C0-\u00FF\u00D1\u00F1'-]{1,44}",
+    de: "[A-Za-z\u00C0-\u00F6\u00F8-\u00FF][A-Za-z\u00C0-\u00F6\u00F8-\u00FF'-]{1,44}",
+    ko: "[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]+",
+    ja: "[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
+  };
+
+  const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;
+  const SPANISH_FEATURE_CHARS = /[\u00F1\u00A1\u00BF]/;
+  const GERMAN_FEATURE_CHARS = /[\u00C4\u00D6\u00DC\u00E4\u00F6\u00FC\u00DF\u1E9E]/;
+
+  function normalizeLookupKeys(raw: Record<string, unknown>): PerPlatformLookupKeys {
+    if (raw.lookupKey !== undefined && !raw.lookupKeys) {
+      const oldKey = raw.lookupKey as LookupKey;
+      raw.lookupKeys = { mac: oldKey, win: oldKey };
+      delete raw.lookupKey;
+    }
+    if (!raw.lookupKeys || typeof raw.lookupKeys !== "object") {
+      return { mac: DEFAULT_LOOKUP_KEY, win: DEFAULT_LOOKUP_KEY };
+    }
+    const keys = raw.lookupKeys as Partial<PerPlatformLookupKeys>;
+    return { mac: keys.mac || DEFAULT_LOOKUP_KEY, win: keys.win || DEFAULT_LOOKUP_KEY };
+  }
+
+  function detectWordLanguage(word: string): string {
+    if (CJK_REGEX.test(word)) return "ja";
+    if (HANGUL_REGEX.test(word)) return "ko";
+    if (GERMAN_FEATURE_CHARS.test(word)) return "de";
+    if (SPANISH_FEATURE_CHARS.test(word)) return "es";
+    if (FRENCH_FEATURE_CHARS.test(word)) return "fr";
+    return "en";
+  }
+
+  function buildWordPattern(languages: string[]): RegExp {
+    // Put "en" last so accented-language patterns (supersets of the ASCII-only en
+    // pattern) match a whole word including diacritics instead of fragmenting it.
+    const ordered = [
+      ...languages.filter((l) => l !== "en"),
+      ...(languages.includes("en") ? ["en"] : []),
+    ];
+    const patterns = ordered.map((lang) => LANGUAGE_WORD_PATTERNS[lang]).filter(Boolean);
+    const combined = patterns.length > 0 ? patterns.join("|") : LANGUAGE_WORD_PATTERNS.en;
+    return new RegExp(combined, "g");
+  }
+
+  function extractSentence(text: string, word: string): string {
+    const idx = text.indexOf(word);
+    if (idx < 0) return text.slice(0, 120);
+    const start = Math.max(0, idx - 40);
+    const end = Math.min(text.length, idx + 80);
+    return text.slice(start, end);
+  }
+
+  function computeWordSignature(word: string, start: number, end: number, text: string): string {
+    return `${word.toLowerCase()}|${start}|${end}|${text}`;
+  }
+
+  const LANG_LABELS: Record<string, string> = {
+    en: "英语", fr: "法语", es: "西班牙语", de: "德语", ko: "韩语", ja: "日语",
+  };
+  const LANG_SHORT_LABELS: Record<string, string> = {
+    en: "[英]", fr: "[法]", es: "[西]", de: "[德]", ko: "[한]", ja: "[日]",
+  };
+
+  const currentPlatform = detectPlatform();
+
   interface Settings {
     lookupKeys: PerPlatformLookupKeys;
     hoverDelay: number;
     autoSpeak: boolean;
-    fireworksEffect: "canvas" | "css" | "none";
+    fireworksEffect: FireworksEffect;
+    recognizeLanguages: string[];
   }
 
   const DEFAULT_SETTINGS: Settings = {
     lookupKeys: {
-      mac: "Control",
-      win: "Control",
+      mac: DEFAULT_LOOKUP_KEY,
+      win: DEFAULT_LOOKUP_KEY,
     },
     hoverDelay: 100,
     autoSpeak: false,
     fireworksEffect: "canvas",
+    recognizeLanguages: ["en"],
   };
 
-  function getActiveLookupKey(): LookupKey {
-    return settings.lookupKeys?.[currentPlatform] || "Control";
+  const CJK_REGEX = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]/;
+  const HANGUL_REGEX = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/;
+  const CJK_PUNCT_REGEX = /^[\u3000-\u303F\uFF00-\uFFEF\s]+$/;
+
+  interface TinySegmenter {
+    segment(text: string): string[];
   }
 
-  const WORD_PATTERN = /[A-Za-z][A-Za-z'-]{1,44}/g;
+  let segmenterInstance: TinySegmenter | null = null;
+  function getSegmenter(): TinySegmenter | null {
+    if (segmenterInstance) return segmenterInstance;
+    if (typeof (window as unknown as { TinySegmenter?: new () => TinySegmenter }).TinySegmenter === "function") {
+      segmenterInstance = new (window as unknown as { TinySegmenter: new () => TinySegmenter }).TinySegmenter();
+      return segmenterInstance;
+    }
+    return null;
+  }
+
+  function isCJKChar(ch: string): boolean {
+    return CJK_REGEX.test(ch);
+  }
+
+  function isHangulChar(ch: string): boolean {
+    return HANGUL_REGEX.test(ch);
+  }
+
+  function getActiveLookupKey(): LookupKey {
+    return settings.lookupKeys?.[currentPlatform] || DEFAULT_LOOKUP_KEY;
+  }
+
+
+
+  function isLanguageEnabled(lang: string): boolean {
+    return (settings.recognizeLanguages || ["en"]).includes(lang);
+  }
+
+
+
+  let wordPattern: RegExp = buildWordPattern(["en"]);
   const EXCLUDED_SELECTOR = "input, textarea, [contenteditable='true'], [contenteditable=''], pre, code";
   const CURSOR_STYLE_ID = "word-picker-cursor-style";
   const HIGHLIGHT_STYLE_ID = "word-picker-highlight-style";
@@ -94,9 +211,15 @@ function getFireworksAPI(): FireworksAPI {
   let latestRequestToken = 0;
   let lookupKeyPressed = false;
   let isUpdatingPopup = false;
-  let isClosingPopup = false;
+    let isClosingPopup = false;
+  let isPreservingPopup = false;
   let pendingPopupFocus = false;
+  let popupFocusDesired = false;
   let wordHighlight: Highlight | null = null;
+
+  let imageOverlayHost: HTMLDivElement | null = null;
+  let currentImageElement: HTMLImageElement | null = null;
+  let ocrRequestToken = 0;
 
   const KEYDOWN_POPUP_DELAY_MS = 100;
   const VIEWPORT_CHANGE_THROTTLE_MS = 100;
@@ -120,6 +243,7 @@ function getFireworksAPI(): FireworksAPI {
   interface CurrentLookup extends DetectionResult {
     signature: string;
     translation?: TranslationData;
+    sourceLang?: string;
   }
 
   interface TranslationData {
@@ -132,6 +256,7 @@ function getFireworksAPI(): FireworksAPI {
     note?: string;
     error?: boolean;
     provider?: string;
+    audio?: string;
   }
 
   interface SourceRange {
@@ -152,30 +277,17 @@ function getFireworksAPI(): FireworksAPI {
     try {
       const response = await sendMessage({ type: "GET_SETTINGS" });
       const raw: Record<string, unknown> = (response.settings as Record<string, unknown>) || {};
-      if (raw.lookupKey !== undefined && !raw.lookupKeys) {
-        const oldKey = raw.lookupKey as LookupKey;
-        raw.lookupKeys = {
-          mac: oldKey,
-          win: oldKey,
-        };
-        delete raw.lookupKey;
-      }
-      if (!raw.lookupKeys || typeof raw.lookupKeys !== "object") {
-        raw.lookupKeys = { mac: "Control", win: "Control" };
-      } else {
-        const keys = raw.lookupKeys as Partial<PerPlatformLookupKeys>;
-        raw.lookupKeys = {
-          mac: keys.mac || "Control",
-          win: keys.win || "Control",
-        };
-      }
+      raw.lookupKeys = normalizeLookupKeys(raw);
+      delete (raw as Record<string, unknown>).lookupKey;
       settings = {
         ...DEFAULT_SETTINGS,
         ...raw,
       } as Settings;
+      wordPattern = buildWordPattern(settings.recognizeLanguages || ["en"]);
     } catch (error) {
       _logger.warn("加载设置失败，使用默认设置：", error);
       settings = { ...DEFAULT_SETTINGS };
+      wordPattern = buildWordPattern(["en"]);
     }
   }
 
@@ -190,7 +302,7 @@ function getFireworksAPI(): FireworksAPI {
     document.addEventListener("focusin", handleFocusInWhilePinned, true);
     window.addEventListener("blur", exitPenMode, true);
     window.addEventListener("resize", handleViewportChange, true);
-    browser.storage.onChanged.addListener(handleStorageChange);
+    (chrome as any).storage.onChanged.addListener(handleStorageChange);
     visibilityChangeHandler = () => {
       if (document.hidden) {
         exitPenMode();
@@ -210,7 +322,7 @@ function getFireworksAPI(): FireworksAPI {
     document.removeEventListener("focusin", handleFocusInWhilePinned, true);
     window.removeEventListener("blur", exitPenMode, true);
     window.removeEventListener("resize", handleViewportChange, true);
-    browser.storage.onChanged.removeListener(handleStorageChange);
+    (chrome as any).storage.onChanged.removeListener(handleStorageChange);
     if (visibilityChangeHandler) {
       document.removeEventListener("visibilitychange", visibilityChangeHandler);
       visibilityChangeHandler = null;
@@ -228,34 +340,21 @@ function getFireworksAPI(): FireworksAPI {
     }
 
     const raw = changes.settings.newValue as Record<string, unknown>;
-    if (raw.lookupKey !== undefined && !raw.lookupKeys) {
-      const oldKey = raw.lookupKey as LookupKey;
-      raw.lookupKeys = {
-        mac: oldKey,
-        win: oldKey,
-      };
-      delete raw.lookupKey;
-    }
-    if (!raw.lookupKeys || typeof raw.lookupKeys !== "object") {
-      raw.lookupKeys = { mac: "Control", win: "Control" };
-    } else {
-      const keys = raw.lookupKeys as Partial<PerPlatformLookupKeys>;
-      raw.lookupKeys = {
-        mac: keys.mac || "Control",
-        win: keys.win || "Control",
-      };
-    }
+    raw.lookupKeys = normalizeLookupKeys(raw);
+    delete (raw as Record<string, unknown>).lookupKey;
 
     settings = {
       ...DEFAULT_SETTINGS,
       ...raw,
     } as Settings;
+    wordPattern = buildWordPattern(settings.recognizeLanguages || ["en"]);
     exitPenMode();
   }
 
   function handleKeyDown(event: KeyboardEvent): void {
-    if (event.key === "Escape" && popupContainer) {
+    if (event.key === "Escape" && (popupContainer || imageOverlayHost)) {
       event.preventDefault();
+      isPreservingPopup = false;
       closePopupAndReset();
       return;
     }
@@ -338,7 +437,13 @@ function getFireworksAPI(): FireworksAPI {
     clearKeydownPopupTimer();
     removeCursor();
     clearWordHighlight();
+    if (currentState === STATE.OCR_LOADING || currentState === STATE.IMAGE_OVERLAY) {
+      clearImageOverlay();
+      currentState = preservePopup && popupContainer?.isConnected ? STATE.SHOWING : STATE.IDLE;
+    }
     if (preservePopup && popupContainer?.isConnected) {
+      isPreservingPopup = true;
+      popupFocusDesired = true;
       currentState = currentState === STATE.LOADING ? STATE.LOADING : STATE.SHOWING;
       positionPopup(popupContainer, activeAnchor.x, activeAnchor.y);
       requestAnimationFrame(() => {
@@ -349,8 +454,10 @@ function getFireworksAPI(): FireworksAPI {
             return;
           }
           pendingPopupFocus = false;
+          popupFocusDesired = true;
           focusPopup();
         }
+        isPreservingPopup = false;
       });
       return;
     }
@@ -359,21 +466,26 @@ function getFireworksAPI(): FireworksAPI {
 
   function exitPenMode(): void {
     lookupKeyPressed = false;
+    isPreservingPopup = false;
     closePopupAndReset();
   }
 
   function closePopupAndReset(): void {
+    if (isPreservingPopup) return;
     isClosingPopup = true;
     clearHoverTimer();
     clearKeydownPopupTimer();
     latestRequestToken += 1;
+    ocrRequestToken += 1;
     lookupKeyPressed = false;
     pendingPopupFocus = false;
+    popupFocusDesired = false;
     hidePopup();
     currentLookup = null;
     currentState = STATE.IDLE;
     removeCursor();
     clearWordHighlight();
+    clearImageOverlay();
     isClosingPopup = false;
   }
 
@@ -415,6 +527,14 @@ function getFireworksAPI(): FireworksAPI {
   }
 
   function handleViewportChange(): void {
+    if (imageOverlayHost && currentImageElement) {
+      const rect = currentImageElement.getBoundingClientRect();
+      imageOverlayHost.style.left = `${rect.left}px`;
+      imageOverlayHost.style.top = `${rect.top}px`;
+      imageOverlayHost.style.width = `${rect.width}px`;
+      imageOverlayHost.style.height = `${rect.height}px`;
+    }
+
     if (!popupContainer || isPopupPinned()) {
       return;
     }
@@ -446,7 +566,11 @@ function getFireworksAPI(): FireworksAPI {
   }
 
   function handleFocusInWhilePinned(event: FocusEvent): void {
-    if (!isPopupPinned()) {
+    if (!isPopupPinned() || isPreservingPopup) {
+      return;
+    }
+
+    if (currentState === STATE.LOADING) {
       return;
     }
 
@@ -459,17 +583,45 @@ function getFireworksAPI(): FireworksAPI {
   }
 
   function handleMouseMove(event: MouseEvent): void {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    if (popupHost && path.includes(popupHost)) {
+      return;
+    }
     activeAnchor = { x: event.clientX, y: event.clientY };
 
     if (!lookupKeyPressed) {
       return;
     }
 
+    if (currentState === STATE.IMAGE_OVERLAY) {
+      return;
+    }
+
+    const imageDetection = IMAGE_OCR_ENABLED ? detectImageAtPoint(event.clientX, event.clientY) : null;
+    if (imageDetection) {
+      clearWordHighlight();
+
+      if (currentState === STATE.OCR_LOADING && currentImageElement === imageDetection.element) {
+        return;
+      }
+
+      clearHoverTimer();
+      const delay = Math.max(0, Number(settings.hoverDelay) || DEFAULT_SETTINGS.hoverDelay);
+      hoverTimer = window.setTimeout(() => {
+        void performImageOcr(imageDetection);
+      }, delay);
+      return;
+    }
+
+    if (currentState === STATE.OCR_LOADING) {
+      clearImageOverlay();
+      currentState = STATE.PEN;
+    }
+
     // 即时高亮鼠标指向的单词（独立于弹窗的 hoverDelay，体验更跟手）
     updateHoverHighlight(event.clientX, event.clientY);
 
-    // 只在 PEN 状态下才触发 lookup（SHOWING/LOADING 时由已有弹窗处理）
-    if (currentState !== STATE.PEN) {
+    if (currentState !== STATE.PEN && currentState !== STATE.SHOWING) {
       return;
     }
 
@@ -510,16 +662,31 @@ function getFireworksAPI(): FireworksAPI {
       return;
     }
 
-    const signature = `${detection.word.toLowerCase()}|${detection.start}|${detection.end}|${detection.text}`;
+    const signature = computeWordSignature(detection.word, detection.start, detection.end, detection.text);
     if (currentLookup?.signature === signature && (currentState === STATE.LOADING || currentState === STATE.SHOWING)) {
       positionPopup(popupContainer!, x, y);
       return;
     }
 
     _logger.debug('lookupAtPoint', { word: detection.word, x, y });
+    const detectedLang = detectWordLanguage(detection.word);
+    if (!isLanguageEnabled(detectedLang)) {
+      updatePopup({
+        word: detection.word,
+        phonetic: "",
+        meaning: `当前未启用${LANG_LABELS[detectedLang] || detectedLang}识别，请在设置中勾选`,
+        exampleEn: "",
+        exampleZh: "",
+        sentence: extractSentenceFromDetection(detection),
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+      return;
+    }
     currentLookup = {
       ...detection,
       signature,
+      sourceLang: detectedLang,
     };
     currentState = STATE.LOADING;
     showPopup(x, y, buildLoadingData(detection.word));
@@ -545,6 +712,7 @@ function getFireworksAPI(): FireworksAPI {
       const response = await sendMessage({
         type: "TRANSLATE",
         word: detection.word,
+        sourceLang: detectedLang,
       });
 
       if (requestToken !== latestRequestToken || currentLookup?.signature !== signature) {
@@ -560,13 +728,15 @@ function getFireworksAPI(): FireworksAPI {
       });
       currentState = STATE.SHOWING;
 
-      if (pendingPopupFocus && isPopupPinned()) {
+      if (pendingPopupFocus) {
         pendingPopupFocus = false;
+        isPreservingPopup = false;
+        popupFocusDesired = true;
         focusPopup();
       }
 
       if (settings.autoSpeak) {
-        speakWord(translation.word || detection.word);
+        speakWord(translation.word || detection.word, currentLookup?.sourceLang || "en");
       }
     } catch (error) {
       if (requestToken !== latestRequestToken || currentLookup?.signature !== signature) {
@@ -584,8 +754,10 @@ function getFireworksAPI(): FireworksAPI {
       });
       currentState = STATE.SHOWING;
 
-      if (pendingPopupFocus && isPopupPinned()) {
+      if (pendingPopupFocus) {
         pendingPopupFocus = false;
+        isPreservingPopup = false;
+        popupFocusDesired = true;
         focusPopup();
       }
     }
@@ -607,7 +779,45 @@ function getFireworksAPI(): FireworksAPI {
     }
 
     const offset = Math.max(0, Math.min(caret.offset, text.length));
-    const matches = [...text.matchAll(WORD_PATTERN)];
+
+    if (offset < text.length && isCJKChar(text[offset]) && isLanguageEnabled("ja")) {
+      const segmenter = getSegmenter();
+      if (segmenter) {
+        const segments = segmenter.segment(text);
+        let pos = 0;
+        for (const seg of segments) {
+          const segStart = pos;
+          const segEnd = pos + seg.length;
+          if (offset >= segStart && offset < segEnd) {
+            if (!CJK_PUNCT_REGEX.test(seg)) {
+              return {
+                word: seg,
+                node: caret.node,
+                text,
+                start: segStart,
+                end: segEnd,
+                offset,
+              };
+            }
+            break;
+          }
+          pos = segEnd;
+        }
+      }
+    }
+
+    if (offset < text.length && isHangulChar(text[offset]) && isLanguageEnabled("ko")) {
+      let start = offset;
+      let end = offset;
+      while (start > 0 && isHangulChar(text[start - 1])) start--;
+      while (end < text.length && isHangulChar(text[end])) end++;
+      const word = text.slice(start, end);
+      if (word.length > 0) {
+        return { word, node: caret.node, text, start, end, offset };
+      }
+    }
+
+    const matches = [...text.matchAll(wordPattern)];
 
     for (const match of matches) {
       const start = match.index ?? 0;
@@ -694,6 +904,218 @@ function getFireworksAPI(): FireworksAPI {
     return detection.text.slice(start, end).trim().replace(/\s+/g, " ");
   }
 
+  interface ImageDetection {
+    element: HTMLImageElement;
+    rect: DOMRect;
+    src: string;
+  }
+
+  function detectImageAtPoint(x: number, y: number): ImageDetection | null {
+    const element = document.elementFromPoint(x, y);
+    if (!element) return null;
+    if (popupHost && (element === popupHost || popupHost.contains(element))) return null;
+    if (imageOverlayHost && (element === imageOverlayHost || imageOverlayHost.contains(element))) return null;
+
+    const img = element.closest('img') as HTMLImageElement | null;
+    if (!img || !img.src) return null;
+    if (img.naturalWidth === 0 || img.naturalHeight === 0) return null;
+
+    const rect = img.getBoundingClientRect();
+    if (rect.width < 50 || rect.height < 30) return null;
+
+    return { element: img, rect, src: img.src };
+  }
+
+  async function performImageOcr(detection: ImageDetection): Promise<void> {
+    const token = ++ocrRequestToken;
+    currentImageElement = detection.element;
+
+    if (isSafari()) {
+      currentState = STATE.SHOWING;
+      showPopup(detection.rect.left + detection.rect.width / 2, detection.rect.top + 20, {
+        word: "图片识别",
+        phonetic: "",
+        meaning: "当前浏览器暂不支持图片识别",
+        exampleEn: "",
+        exampleZh: "",
+        error: true,
+      });
+      return;
+    }
+
+    currentState = STATE.OCR_LOADING;
+
+    showPopup(detection.rect.left + detection.rect.width / 2, detection.rect.top + 20, {
+      word: "图片识别",
+      phonetic: "",
+      meaning: "正在识别图片中的文字...",
+      exampleEn: "",
+      exampleZh: "",
+    });
+
+    try {
+      const response = await sendMessage({
+        type: "IMAGE_OCR",
+        imageUrl: detection.src,
+      }, 120000);
+
+      if (token !== ocrRequestToken) return;
+
+      const ocrResult = response.ocrResult as {
+        words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>;
+        imageWidth: number;
+        imageHeight: number;
+      } | undefined;
+
+      if (!ocrResult || !ocrResult.words || ocrResult.words.length === 0) {
+        updatePopup({
+          word: "图片识别",
+          phonetic: "",
+          meaning: "未识别到图片中的文字",
+          exampleEn: "",
+          exampleZh: "",
+          error: true,
+        });
+        currentState = STATE.SHOWING;
+        return;
+      }
+
+      currentState = STATE.IMAGE_OVERLAY;
+      hidePopup();
+      showImageOverlay(detection, ocrResult);
+    } catch (error) {
+      if (token !== ocrRequestToken) return;
+      updatePopup({
+        word: "图片识别",
+        phonetic: "",
+        meaning: error instanceof Error ? error.message : "图片识别失败",
+        exampleEn: "",
+        exampleZh: "",
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+    }
+  }
+
+  function showImageOverlay(
+    detection: ImageDetection,
+    ocrResult: { words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }>; imageWidth: number; imageHeight: number }
+  ): void {
+    clearImageOverlay();
+
+    const imgRect = detection.rect;
+    const scaleX = imgRect.width / ocrResult.imageWidth;
+    const scaleY = imgRect.height / ocrResult.imageHeight;
+
+    imageOverlayHost = document.createElement("div");
+    imageOverlayHost.id = "word-picker-image-overlay";
+    imageOverlayHost.style.position = "fixed";
+    imageOverlayHost.style.left = `${imgRect.left}px`;
+    imageOverlayHost.style.top = `${imgRect.top}px`;
+    imageOverlayHost.style.width = `${imgRect.width}px`;
+    imageOverlayHost.style.height = `${imgRect.height}px`;
+    imageOverlayHost.style.zIndex = "2147483646";
+    imageOverlayHost.style.pointerEvents = "auto";
+
+    for (const word of ocrResult.words) {
+      if (!word.text || !word.text.trim()) continue;
+      const cleanText = word.text.trim();
+      if (word.confidence < 30) continue;
+      if (!/[A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF\u00C0-\u00FF\uAC00-\uD7AF]/.test(cleanText)) continue;
+      if (cleanText.length <= 1 && !/[\u4E00-\u9FFF\u3400-\u4DBF\uAC00-\uD7AF]/.test(cleanText)) continue;
+
+      const hotspot = document.createElement("div");
+      hotspot.className = "wp-ocr-hotspot";
+      hotspot.style.position = "absolute";
+      hotspot.style.left = `${word.bbox.x0 * scaleX}px`;
+      hotspot.style.top = `${word.bbox.y0 * scaleY}px`;
+      hotspot.style.width = `${(word.bbox.x1 - word.bbox.x0) * scaleX}px`;
+      hotspot.style.height = `${(word.bbox.y1 - word.bbox.y0) * scaleY}px`;
+      hotspot.style.pointerEvents = "auto";
+      hotspot.style.cursor = "pointer";
+      hotspot.title = cleanText;
+
+      hotspot.addEventListener("mouseenter", () => {
+        hotspot.style.background = "rgba(137, 180, 250, 0.45)";
+        hotspot.style.color = "#fff";
+        hotspot.style.textShadow = "0 0 2px rgba(0,0,0,0.6)";
+        hotspot.textContent = cleanText;
+        hotspot.style.fontSize = `${Math.max(10, Math.min(16, (word.bbox.y1 - word.bbox.y0) * scaleY * 0.7))}px`;
+        hotspot.style.fontFamily = "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+        hotspot.style.display = "flex";
+        hotspot.style.alignItems = "center";
+        hotspot.style.justifyContent = "center";
+        hotspot.style.overflow = "hidden";
+        hotspot.style.borderRadius = "2px";
+        hotspot.style.fontWeight = "600";
+      });
+
+      hotspot.addEventListener("mouseleave", () => {
+        hotspot.style.background = "transparent";
+        hotspot.style.color = "transparent";
+        hotspot.textContent = "";
+      });
+
+      hotspot.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const rect = hotspot.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        triggerWordLookup(cleanText, cx, cy);
+      });
+
+      imageOverlayHost.appendChild(hotspot);
+    }
+
+    document.documentElement.appendChild(imageOverlayHost);
+  }
+
+  function clearImageOverlay(): void {
+    if (imageOverlayHost) {
+      imageOverlayHost.remove();
+      imageOverlayHost = null;
+    }
+    currentImageElement = null;
+  }
+
+  async function triggerWordLookup(word: string, x: number, y: number): Promise<void> {
+    currentState = STATE.LOADING;
+    showPopup(x, y, buildLoadingData(word));
+
+    const detectedLang = detectWordLanguage(word);
+    const requestToken = ++latestRequestToken;
+    try {
+      const response = await sendMessage({ type: "TRANSLATE", word, sourceLang: detectedLang });
+      if (requestToken !== latestRequestToken) return;
+
+      const translation = (response.translation as TranslationData) || buildLoadingData(word);
+      currentLookup = {
+        word,
+        node: document.createTextNode(word),
+        text: word,
+        start: 0,
+        end: word.length,
+        offset: 0,
+        signature: computeWordSignature(word, 0, word.length, word),
+        translation,
+        sourceLang: detectedLang,
+      };
+      updatePopup(translation);
+      currentState = STATE.SHOWING;
+    } catch (error) {
+      if (requestToken !== latestRequestToken) return;
+      updatePopup({
+        word,
+        phonetic: "",
+        meaning: error instanceof Error ? error.message : "翻译失败",
+        exampleEn: "",
+        exampleZh: "",
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+    }
+  }
+
   function buildLoadingData(word: string): TranslationData {
     return {
       word,
@@ -770,6 +1192,9 @@ function getFireworksAPI(): FireworksAPI {
   function updatePopup(data: TranslationData): void {
     if (!popupContainer?.isConnected) {
       showPopup(activeAnchor.x, activeAnchor.y, data);
+      if (popupFocusDesired) {
+        focusPopup();
+      }
       return;
     }
 
@@ -777,16 +1202,105 @@ function getFireworksAPI(): FireworksAPI {
     const previousContainer = popupContainer;
     const nextContainer = buildPopupElement(data);
     copyPopupPosition(previousContainer, nextContainer);
-    previousContainer.replaceWith(nextContainer);
-    popupContainer = nextContainer;
-    positionPopup(popupContainer, activeAnchor.x, activeAnchor.y);
-    requestAnimationFrame(() => {
-      if (popupContainer === nextContainer) {
-        positionPopup(popupContainer, activeAnchor.x, activeAnchor.y);
-      }
+    if (!previousContainer.isConnected) {
+      showPopup(activeAnchor.x, activeAnchor.y, data);
       isUpdatingPopup = false;
+      if (popupFocusDesired) {
+        focusPopup();
+      }
+      return;
+    }
+    try {
+      previousContainer.replaceWith(nextContainer);
+    } catch {
+      showPopup(activeAnchor.x, activeAnchor.y, data);
+      isUpdatingPopup = false;
+      if (popupFocusDesired) {
+        focusPopup();
+      }
+      return;
+    }
+    popupContainer = nextContainer;
+    // 内容更新时保持弹窗当前像素位置不变，避免不同语言内容高度差异
+    // 触发 positionPopup 重算导致翻转/偏移。仅在缺少位置信息时兜底重算。
+    if (!nextContainer.style.left || !nextContainer.style.top) {
+      positionPopup(nextContainer, activeAnchor.x, activeAnchor.y);
+    }
+    isUpdatingPopup = false;
+    if (popupFocusDesired) {
+      focusPopup();
+    }
+  }
+
+  function showLangDropdown(langTag: HTMLSpanElement): void {
+    const wrap = langTag.closest(".popup-lang-wrap") || langTag.parentElement;
+    const existingDropdown = wrap?.querySelector(".popup-lang-dropdown");
+    if (existingDropdown) {
+      existingDropdown.remove();
+      return;
+    }
+    const configuredLangs = settings.recognizeLanguages || ["en"];
+    if (configuredLangs.length <= 1) return;
+    const currentLang = langTag.getAttribute("data-current-lang") || "en";
+    const dropdown = document.createElement("div");
+    dropdown.className = "popup-lang-dropdown";
+    dropdown.innerHTML = configuredLangs.map(code => {
+      const label = code.toUpperCase();
+      const active = code === currentLang ? " active" : "";
+      return `<div class="popup-lang-option${active}" data-lang="${escapeHtml(code)}">${label}</div>`;
+    }).join("");
+    wrap?.appendChild(dropdown);
+    dropdown.addEventListener("click", (e) => {
+      const target = e.target as HTMLElement;
+      if (!target.classList.contains("popup-lang-option")) return;
+      const newLang = target.getAttribute("data-lang");
+      if (!newLang || newLang === currentLang) {
+        dropdown.remove();
+        return;
+      }
+      currentState = STATE.LOADING;
+      isPreservingPopup = true;
+      dropdown.remove();
+      handleLanguageSwitch(newLang);
     });
   }
+
+  async function handleLanguageSwitch(newLang: string): Promise<void> {
+    const lookup = currentLookup;
+    if (!lookup?.word) return;
+    const word = lookup.word;
+    lookup.sourceLang = newLang;
+    currentState = STATE.LOADING;
+    const requestToken = ++latestRequestToken;
+    try {
+      const response = await sendMessage({ type: "TRANSLATE", word, sourceLang: newLang });
+      if (requestToken !== latestRequestToken) return;
+      const translation = (response.translation as TranslationData) || buildLoadingData(word);
+      lookup.translation = translation;
+      updatePopup({
+        ...translation,
+        sentence: lookup.text ? extractSentence(lookup.text, lookup.word) : undefined,
+      });
+      currentState = STATE.SHOWING;
+      isPreservingPopup = false;
+      focusPopup();
+    } catch (error) {
+      if (requestToken !== latestRequestToken) return;
+      updatePopup({
+        word,
+        phonetic: "",
+        meaning: error instanceof Error ? error.message : "翻译失败",
+        exampleEn: "",
+        exampleZh: "",
+        error: true,
+      });
+      currentState = STATE.SHOWING;
+      isPreservingPopup = false;
+      focusPopup();
+    }
+  }
+
+
 
   function buildPopupElement(data: TranslationData): HTMLDivElement {
     const container = document.createElement("div");
@@ -804,13 +1318,24 @@ function getFireworksAPI(): FireworksAPI {
     const sentenceMarkup = data.sentence
       ? `<div class="popup-sentence">上下文：${escapeHtml(data.sentence)}</div>`
       : "";
+    const currentLang = currentLookup?.sourceLang || "en";
+    const langLabel = currentLang.toUpperCase();
+    const configuredLangs = settings.recognizeLanguages || ["en"];
+    const langDropdownMarkup = configuredLangs.length > 1
+      ? `<span class="popup-lang-wrap"><span class="popup-lang-tag" data-current-lang="${escapeHtml(currentLang)}">${langLabel} ▾</span></span>`
+      : "";
 
     container.innerHTML = `
       <div class="popup-header">
         <span class="popup-word">${escapeHtml(data.word || "")}</span>
+        ${langDropdownMarkup}
         <button class="popup-close" type="button" aria-label="关闭">×</button>
       </div>
-      <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
+      <div class="popup-phonetic-row">
+        <div class="popup-phonetic">${escapeHtml(data.phonetic || "")}</div>
+        ${data.audio ? `<button class="btn-audio" type="button" title="播放发音">▶</button>` : ""}
+      </div>
+      <div class="popup-source-lang">${LANG_SHORT_LABELS[currentLang] || ""}</div>
       <div class="popup-meaning ${data.error ? "is-error" : ""}">${escapeHtml(data.meaning || "")}</div>
       ${noteMarkup}
       ${exampleMarkup}
@@ -831,7 +1356,7 @@ function getFireworksAPI(): FireworksAPI {
 
     container.addEventListener("focusout", (event) => {
       window.setTimeout(() => {
-        if (isUpdatingPopup || !popupContainer || isClosingPopup) {
+        if (isUpdatingPopup || !popupContainer || isClosingPopup || isPreservingPopup) {
           return;
         }
 
@@ -840,6 +1365,10 @@ function getFireworksAPI(): FireworksAPI {
         }
 
         if (lookupKeyPressed) {
+          return;
+        }
+
+        if (currentState === STATE.LOADING) {
           return;
         }
 
@@ -862,6 +1391,22 @@ function getFireworksAPI(): FireworksAPI {
     container.querySelector(".popup-close")!.addEventListener("click", () => {
       closePopupAndReset();
     });
+
+    const audioBtn = container.querySelector(".btn-audio") as HTMLButtonElement | null;
+    if (audioBtn && data.audio) {
+      audioBtn.addEventListener("click", () => {
+        const audio = new Audio(data.audio);
+        audio.play().catch(() => {});
+      });
+    }
+
+    const langTag = container.querySelector(".popup-lang-tag") as HTMLSpanElement | null;
+    if (langTag) {
+      langTag.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showLangDropdown(langTag);
+      });
+    }
 
     container.querySelector(".btn-save")!.addEventListener("click", async () => {
       if (!currentLookup?.translation) {
@@ -1043,6 +1588,7 @@ function getFireworksAPI(): FireworksAPI {
       sourceRange?: SourceRange;
       translation: string;
     }>;
+    sourceLang?: string;
     _legacy: {
       id: string;
       phonetic: string;
@@ -1088,6 +1634,8 @@ function getFireworksAPI(): FireworksAPI {
       timeAdded: now,
       timeUpdated: now,
       contexts: contexts,
+      // 语言感知：把采集时识别到的源语言（detectWordLanguage 或用户手动覆盖）一并保存
+      sourceLang: lookup.sourceLang,
       // 保留旧数据作为兼容
       _legacy: {
         id: (crypto as Crypto).randomUUID?.() || `local-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -1154,59 +1702,46 @@ function getFireworksAPI(): FireworksAPI {
     }, 0);
   }
 
-  function speakWord(word: string): void {
+  const LANG_VOICE_MAP: Record<string, string> = {
+    en: "en-US",
+    fr: "fr-FR",
+    es: "es-ES",
+    de: "de-DE",
+    ko: "ko-KR",
+    ja: "ja-JP",
+  };
+
+  function speakWord(word: string, sourceLang: string = "en"): void {
     if (!("speechSynthesis" in window) || !word) {
       return;
     }
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(word);
-    utterance.lang = "en-US";
-    // 语速略低于默认，更接近自然朗读节奏
+    const lang = LANG_VOICE_MAP[sourceLang] || "en-US";
+    utterance.lang = lang;
     utterance.rate = 0.9;
     utterance.pitch = 1;
-    const voice = pickEnglishVoice();
+    const voice = pickVoiceForLang(sourceLang);
     if (voice) {
       utterance.voice = voice;
     }
     window.speechSynthesis.speak(utterance);
   }
 
-  // 优先选择高质量的英文女声（Google/系统女声），避免默认机器人音色。
-  // 注意：voices 列表可能在页面加载后才异步就绪，取不到时先用默认 voice。
-  function pickEnglishVoice(): SpeechSynthesisVoice | null {
+  function pickVoiceForLang(lang: string): SpeechSynthesisVoice | null {
     const voices = window.speechSynthesis.getVoices();
     if (!voices || voices.length === 0) {
       return null;
     }
-    const enVoices = voices.filter((v) => /^en(-|_)/i.test(v.lang));
-    const pool = enVoices.length > 0 ? enVoices : voices;
+    const langPrefix = LANG_VOICE_MAP[lang] || "en";
+    const langCode = langPrefix.split("-")[0];
+    const langVoices = voices.filter((v) => v.lang.toLowerCase().startsWith(langCode.toLowerCase()));
+    const pool = langVoices.length > 0 ? langVoices : voices;
 
-    // 按优先级匹配高质量音色：Google 系列 > 女性/自然名 > 其余
-    const preferredNames = [
-      "Google US English",
-      "Google UK English Female",
-      "Samantha",
-      "Karen",
-      "Moira",
-      "Tessa",
-      "Zira",
-      "Microsoft Aria",
-      "Microsoft Jenny",
-    ];
-    for (const name of preferredNames) {
-      const found = pool.find((v) => v.name === name);
-      if (found) {
-        return found;
-      }
-    }
     const google = pool.find((v) => /google/i.test(v.name));
     if (google) {
       return google;
-    }
-    const female = pool.find((v) => /female|aria|jenny|zira|samantha|karen|moira|tessa/i.test(v.name));
-    if (female) {
-      return female;
     }
     return pool[0] || null;
   }
@@ -1320,8 +1855,7 @@ function getFireworksAPI(): FireworksAPI {
     .popup-header {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      gap: 8px;
     }
 
     .popup-word {
@@ -1329,6 +1863,60 @@ function getFireworksAPI(): FireworksAPI {
       font-weight: 700;
       color: #f5f7ff;
       word-break: break-word;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .popup-lang-wrap {
+      position: relative;
+      display: inline-flex;
+    }
+
+    .popup-lang-tag {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #30363d;
+      color: #8b949e;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+      position: relative;
+    }
+
+    .popup-lang-tag:hover {
+      background: #484f58;
+      color: #c9d1d9;
+    }
+
+        .popup-lang-dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 50%;
+      transform: translateX(-50%);
+      background: #21262d;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 4px 0;
+      z-index: 10;
+      min-width: 60px;
+    }
+
+    .popup-lang-option {
+      padding: 6px 12px;
+      font-size: 12px;
+      color: #c9d1d9;
+      cursor: pointer;
+      text-align: center;
+    }
+
+    .popup-lang-option:hover {
+      background: #30363d;
+    }
+
+    .popup-lang-option.active {
+      color: #58a6ff;
+      font-weight: 600;
     }
 
     .popup-close {
@@ -1344,8 +1932,41 @@ function getFireworksAPI(): FireworksAPI {
     .popup-phonetic {
       font-size: 13px;
       color: #8b949e;
-      margin-top: 4px;
       min-height: 19px;
+    }
+
+    .popup-phonetic-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 4px;
+    }
+
+    .btn-audio {
+      background: transparent;
+      border: 1px solid #45475a;
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #89b4fa;
+      font-size: 10px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .btn-audio:hover {
+      background: #313244;
+      border-color: #89b4fa;
+    }
+
+    .popup-source-lang {
+      font-size: 12px;
+      color: #8b949e;
+      margin-top: 2px;
     }
 
     .popup-meaning {

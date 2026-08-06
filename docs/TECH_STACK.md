@@ -28,6 +28,7 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 | **Options Page** | `options/options.ts` + `options.html` | 设置页面（独立标签页打开） |
 | **Service Worker** | `service/service-worker.ts` | Chrome 后台服务 |
 | **Safari Background** | `service/safari-background.ts` | Safari 后台页面 |
+| **Offscreen Document** | `offscreen/ocr.ts` + `ocr.html` | OCR 图片文字识别（Tesseract.js） |
 
 ### 2.2 核心库（`lib/`）
 
@@ -35,7 +36,7 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 |----|------|------|
 | **Supabase** | `lib/supabase.ts` | Supabase 客户端封装，数据同步 |
 | **离线词典** | `lib/offlineDict.ts` | 本地 ECDict 英汉词典查询 |
-| **翻译** | `lib/translator.ts` | 多源翻译（有道 / MyMemory / Free Dictionary API） |
+| **翻译** | `lib/translator.ts` | 多源翻译（有道 / MyMemory / Free Dictionary API / Wiktionary） |
 | **存储** | `lib/storage.ts` | 浏览器存储（chrome.storage / browser.storage）封装 |
 | **缓存** | `lib/cache.ts` | 查询结果缓存管理 |
 | **消息通信** | `lib/messaging.ts` | 扩展各部分之间的消息传递 |
@@ -47,9 +48,9 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 
 | 文件 | 用途 |
 |------|------|
-| `content-script.ts` | 主逻辑：悬停检测、查词、卡片渲染、收录交互 |
-| `shared.ts` | 内容脚本共享工具 |
-| `fireworks.ts` | 烟花特效（收录单词成功动画） |
+| `content-script.ts` | 主逻辑：悬停检测、查词、卡片渲染、收录交互、OCR 热区叠加 |
+| `shared.ts` | 内容脚本共享工具（escapeHtml/sendMessage/logger） |
+| `fireworks.ts` | 烟花特效（canvas/css/confetti/sparkle/ripple/emoji/hearts 8种） |
 | `globals.d.ts` | 全局类型声明 |
 
 ---
@@ -60,6 +61,7 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 |------|------|------|
 | **后端 BaaS** | Supabase | 与 WordBase 共用数据库 |
 | **Supabase SDK** | `@supabase/supabase-js` | ^2.110.2 |
+| **OCR 引擎** | `tesseract.js` | 图片文字识别（Offscreen Document 内运行） |
 | **本地存储** | `chrome.storage` / `browser.storage` | 扩展 API 存储 |
 | **离线词典** | ECDict | 英汉词典本地数据 |
 | **词典数据格式** | JSON（`ecdict.min.json`）+ CSV 源 | - |
@@ -132,6 +134,8 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 | **Host 权限** | `dictionaryapi.dev` | Free Dictionary API |
 | **Host 权限** | `mymemory.translated.net` | MyMemory 翻译 |
 | **Host 权限** | `dict.youdao.com` | 有道词典 |
+| **Host 权限** | `en.wiktionary.org` | Wiktionary 音标/释义 |
+| **Host 权限** | `supabase.co` | Supabase 认证/数据 |
 | **Host 权限** | `localhost:3001` | 本地开发 API |
 | **Host 权限** | `<all_urls>` | 所有页面注入 content script |
 
@@ -145,8 +149,9 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 | **TS Lint** | `typescript-eslint` | ^8.62.0 |
 | **ESLint 配置格式** | Flat Config | `eslint.config.js` |
 | **测试框架** | Vitest | ^2.1.3 |
+| **E2E 测试** | Playwright | 核心流程端到端测试 |
 | **测试配置** | `vitest.config.ts` + `tests/setup.ts` | - |
-| **测试文件** | `tests/utils.test.ts` | 工具函数测试 |
+| **测试文件** | `tests/unit/` + `tests/integration/` + `tests/e2e/` | 62 个单测 + 集成测试 + E2E |
 | **Node 类型** | `@types/node` | ^26.0.1 |
 | **Sharp 类型** | `@types/sharp` | ^0.31.1 |
 
@@ -165,7 +170,7 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 | Workflow | 触发条件 | 功能 |
 |----------|---------|------|
 | `ci.yml` | push 到 main/dev、PR | Lint + Test + Build |
-| `release.yml` | tag | 构建发布（含 Dev Snapshot 预览版） |
+| `release.yml` | tag / push main / push dev | 构建发布（正式版 / Dev Snapshot） |
 
 **CI 环境：**
 - Node.js 20
