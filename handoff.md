@@ -97,7 +97,7 @@ Phonetic priority: Free Dictionary API (English) > Wiktionary IPA (all languages
 - ~~OCR offscreen document never created — `hasDocument().then(() => true)` discarded return value, `connect()` readiness check never failed, content-script timeout too short (10s vs 30-90s actual). Root cause of "OCR never works".~~ → Fixed
 
 **MEDIUM:**
-1. Word missing `sourceLang` field — all languages mixed in one wordbook
+1. ~~Word missing `sourceLang` field — all languages mixed in one wordbook~~ → Fixed (sourceLang persisted locally + synced as `source_language`; word-base migration 022 + language filter)
 2. `handleSaveWord` throws when not logged in — should allow local-only save
 
 **LOW (all fixed):**

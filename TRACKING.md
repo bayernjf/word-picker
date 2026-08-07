@@ -125,11 +125,10 @@
 
 ### 历史问题（2026-07-30）
 
-#### MEDIUM: Word 缺少 sourceLang 字段
-- 单词保存时不记录来源语言，所有语言混在同一单词本
-- 弹窗里的 `[英]/[法]/[한]` 标签仅在查词时显示，不持久化
-- 无法按语言筛选或导出单词
-- **建议**：后续给 Word 接口加 `sourceLang` 字段，保存时记录
+#### ~~MEDIUM: Word 缺少 sourceLang 字段~~ 已修复（2026-08）
+- Word 已新增 `sourceLang` 字段：查词/保存时持久化（detectWordLanguage 自动识别或浮窗下拉手动覆盖）
+- 同步时经 `mapLocalWordToServer` 以 `source_language` 传给服务端（缺省 'en'，拉取时保留服务端已有值）
+- word-base 侧新增 `words.source_language` 列（migration 022），支持语言筛选/徽章展示/语言感知 AI 释义
 
 #### MEDIUM: handleSaveWord 未登录时直接报错
 - `syncEnabled` 为 true 但未登录时，抛异常「请先登录才能添加单词」
