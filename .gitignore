@@ -4,6 +4,7 @@ dist/
 .DS_Store
 coverage/
 .vitest/
+.codegraph/
 
 # Playwright e2e test artifacts
 test-results/
