@@ -401,14 +401,11 @@ async function handleSaveWord(entry: Partial<Word> & { word: string; translation
   const auth = await getAuthData();
   const settings = await getSettings();
 
-  // 检查是否启用了同步且已登录
-  const syncEnabled = settings.syncEnabled !== false;
+  // 检查是否已登录（同步仅与登录态相关，本地保存不强制）
   const isLoggedIn = Boolean(auth?.accessToken && auth?.refreshToken);
 
-  // 如果启用了同步但未登录，提示用户
-  if (syncEnabled && !isLoggedIn) {
-    throw new Error('请先登录才能添加单词');
-  }
+  // 未登录允许本地保存（P1-2 修复）：同步仅与登录态相关，本地单词本不强制登录。
+  // 登录后首次保存仍会经下方 syncForRead 拉取远端单词本并推送本地积压。
 
   // 仅当本地尚无任何单词本时，才同步拉取一次（首次冷启动需要拿到同步单词本 ID）。
   // 之后的保存不再被「保存前全量拉取」阻塞，避免每次添加都等一次网络往返。
@@ -1542,11 +1539,12 @@ interface AuthStatusResult {
 
 async function handleAuthStatus(): Promise<AuthStatusResult> {
   const auth = await getAuthData();
-  // 登录态已过期：清除并视为未登录
+  // 登录态已过期：只清认证态并视为未登录（P1-1 修复）。
+  // 本地单词/单词本/同步队列一律保留——过期不是登出，重新登录后按既有
+  // 用户切换逻辑处理，未推送的积压随下次 flushSyncQueue 续传。
   if (auth && isAuthExpired(auth)) {
     await setAuthData(null);
     await setCurrentUserEmail(null);
-    await clearUserData();
     return { ok: true, isLoggedIn: false, user: null };
   }
   return {
