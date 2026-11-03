@@ -106,6 +106,7 @@ function createLogger(namespace: string): Logger {
       .replace(/'/g, "&#39;");
   }
 
+  // 与 lib/utils.ts 的 DEFAULT_MESSAGE_TIMEOUT_MS 保持一致
   function sendMessage(message: object, timeoutMs: number = 10000): Promise<SendMessageResponse> {
     let timer: ReturnType<typeof setTimeout> | undefined;
     return Promise.race([

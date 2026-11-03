@@ -16,7 +16,10 @@ export interface MessageResponse {
   [key: string]: unknown;
 }
 
-export function sendMessage<TResponse extends { success: boolean; error?: string } = MessageResponse>(message: object, timeoutMs: number = 5000): Promise<TResponse> {
+// 与 content/shared.ts 的默认保持一致：翻译链路有并发闸门与例句翻译，5s 会在队列积压时误报超时。
+export const DEFAULT_MESSAGE_TIMEOUT_MS = 10000;
+
+export function sendMessage<TResponse extends { success: boolean; error?: string } = MessageResponse>(message: object, timeoutMs: number = DEFAULT_MESSAGE_TIMEOUT_MS): Promise<TResponse> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     browser.runtime.sendMessage(message).then((response) => {
