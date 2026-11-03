@@ -17,6 +17,7 @@ import {
 } from '../lib/storage.js';
 import { translateWord } from '../lib/translator.js';
 import { mergeWordsLastWriteWins } from '../lib/merge-words.js';
+import { toAnki } from '../lib/anki.js';
 import { ensureDictImported, lookupOffline } from '../lib/offlineDict.js';
 import { getCachedTranslation, setCachedTranslation } from '../lib/cache.js';
 import {
@@ -569,25 +570,6 @@ function csvEscape(value: unknown): string {
   }
   text = text.replace(/"/g, '""');
   return `"${text}"`;
-}
-
-function toAnki(words: Word[]): string {
-  return words.map((word) => {
-    const front = word.word;
-    const phonetic = word.phonetic || word._legacy?.phonetic || '';
-    const meaning = word.translation || word._legacy?.meaning || '';
-    const exampleEn = word.exampleEn || word._legacy?.exampleEn || '';
-    const exampleZh = word.exampleZh || word._legacy?.exampleZh || '';
-    const contexts = (word.contexts || []).map((c) => c.context).filter(Boolean).join('<br>');
-    const back = [
-      phonetic ? `<i>${phonetic}</i>` : '',
-      meaning ? `<div>${meaning}</div>` : '',
-      exampleEn ? `<div class="example">${exampleEn}</div>` : '',
-      exampleZh ? `<div class="example">${exampleZh}</div>` : '',
-      contexts ? `<div class="contexts">${contexts}</div>` : '',
-    ].filter(Boolean).join('');
-    return `${front}\t${back}`;
-  }).join('\n');
 }
 
 async function handleSyncNow(): Promise<FlushResult> {
