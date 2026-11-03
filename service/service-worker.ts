@@ -81,6 +81,8 @@ self.addEventListener('error', (event) => {
 const STORAGE_DEVICE_ID = 'deviceId';
 const STORAGE_SYNC_QUEUE = 'syncQueue';
 const STORAGE_DELETE_QUEUE = 'deleteQueue';
+const STORAGE_SYNC_DEAD_LETTER = 'syncDeadLetterQueue';
+const SYNC_DEAD_LETTER_CAP = 100;
 const STORAGE_AUTH = 'authData';
 const STORAGE_SYNC_LOCK = 'syncLock';
 const STORAGE_SYNC_FAILURE = 'syncFailure';
@@ -786,6 +788,15 @@ async function setSyncQueue(queue: SyncQueueEntry[]): Promise<SyncQueueEntry[]> 
   return setQueue(STORAGE_SYNC_QUEUE, queue);
 }
 
+/** 同步冲突条目移入死信队列（封顶 100 条），避免反复重试毒化主队列。 */
+async function appendSyncDeadLetters(entries: SyncQueueEntry[]): Promise<number> {
+  if (entries.length === 0) return 0;
+  const existing = await getQueue<SyncQueueEntry>(STORAGE_SYNC_DEAD_LETTER);
+  const next = [...existing, ...entries].slice(-SYNC_DEAD_LETTER_CAP);
+  await setQueue(STORAGE_SYNC_DEAD_LETTER, next);
+  return next.length;
+}
+
 async function getDeleteQueue(): Promise<string[]> {
   return getQueue(STORAGE_DELETE_QUEUE);
 }
@@ -1094,7 +1105,20 @@ async function pushWords(auth: AuthData): Promise<{ ok: boolean; processed: numb
     logger.info(`[pushWords] 同步完成，清除 ${syncedQueueRevisions.size} 条，队列剩余 ${(await getSyncQueue()).length} 条`);
   }
   if (conflictSet.size > 0) {
-    throw new Error('sync_conflict');
+    // 冲突条目移出主队列进死信：此前它们永不出队，每次 flush 都重推重冲突，
+    // 退避被拉长且拖累后续正常词条。死信条目保留在本地存储供排查/人工处理。
+    const conflictRevisions = new Set(
+      [...payloadByKey.entries()]
+        .filter(([, entry]) => conflictSet.has(normalizeWordValue(entry.payload.word)))
+        .flatMap(([, entry]) => [...entry.queueRevisions])
+    );
+    await runQueueMutation(async () => {
+      const currentQueue = await getSyncQueue();
+      const dead = currentQueue.filter((item) => conflictRevisions.has(getQueueRevision(item)));
+      await setSyncQueue(currentQueue.filter((item) => !conflictRevisions.has(getQueueRevision(item))));
+      const deadCount = await appendSyncDeadLetters(dead);
+      logger.warn('[pushWords] 冲突条目已隔离到死信队列', { conflicts: dead.length, deadTotal: deadCount });
+    });
   }
 
   return { ok: true, processed: payload.length, queueSize: (await getSyncQueue()).length };
