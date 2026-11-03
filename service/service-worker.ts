@@ -16,6 +16,7 @@ import {
   Settings,
 } from '../lib/storage.js';
 import { translateWord } from '../lib/translator.js';
+import { mergeWordsLastWriteWins } from '../lib/merge-words.js';
 import { ensureDictImported, lookupOffline } from '../lib/offlineDict.js';
 import { getCachedTranslation, setCachedTranslation } from '../lib/cache.js';
 import {
@@ -915,12 +916,18 @@ async function pullChanges(auth: AuthData): Promise<void> {
   }
 
   const localBooks = books.map(mapServerBookToLocal);
-  const localWords = words.map(mapServerWordToLocal);
+  const serverWords = words.map(mapServerWordToLocal);
   const pendingWords = await getSyncQueue();
   const pendingKeys = new Set(pendingWords.map(getQueuedWordKey));
+  // 单词级 last-write-wins 合并：本地独有或本地较新的词条不被服务端快照吞掉
+  //（此前本地未入队/被队列上限截断的改动会在下次 pull 被静默覆盖）。
+  const mergeKey = (w: { word?: string; bookId?: string }) =>
+    `${normalizeWordValue(w.word)}::${normalizeBookValue(w.bookId ?? '')}`;
+  const currentLocal = await getWords();
+  const mergedBase = mergeWordsLastWriteWins(serverWords, currentLocal, mergeKey, (winner) => winner);
   const mergedWords = [
     ...pendingWords,
-    ...localWords.filter((word) => !pendingKeys.has(getQueuedWordKey(word))),
+    ...mergedBase.filter((word) => !pendingKeys.has(getQueuedWordKey(word))),
   ];
   await saveBooks(localBooks);
   await saveWords(mergedWords);
