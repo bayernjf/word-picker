@@ -52,6 +52,7 @@ describe('content/shared.js bundle', () => {
       'buildWordPattern',
       'extractSentence',
       'computeWordSignature',
+      'findWordMatchAtOffset',
       'isCjkChar',
       'isHangulChar',
       'LANG_LABELS',
@@ -76,6 +77,9 @@ describe('content/shared.js bundle', () => {
       [...text.matchAll(libPattern)].map((m) => m[0])
     );
 
+    expect(api.findWordMatchAtOffset?.(text, 5, pattern)).toEqual(
+      libHelpers.findWordMatchAtOffset(text, 5, libPattern)
+    );
     expect(api.normalizeLookupKeys?.({ lookupKey: 'Meta' })).toEqual(
       libHelpers.normalizeLookupKeys({ lookupKey: 'Meta' })
     );
@@ -90,6 +94,7 @@ describe('content/shared.js bundle', () => {
       /function computeWordSignature/,
       /const LANGUAGE_WORD_PATTERNS/,
       /const FRENCH_FEATURE_CHARS/,
+      /matchAll\(wordPattern\)/,
     ];
     for (const pattern of forbidden) {
       expect(source, `content-script still defines ${pattern}`).not.toMatch(pattern);

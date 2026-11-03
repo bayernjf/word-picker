@@ -81,6 +81,45 @@ export function extractSentence(text: string, word?: string): string {
   return text.slice(start, end);
 }
 
+// 取词窗口：只扫描 caret 附近的片段，避免对长文本节点每帧全量 matchAll。
+// 单词模式最长 45 个字符（见 constants.ts），200 字符的窗口足以完整覆盖
+// 光标所在的单词，不会把词切断。
+export const LOOKUP_WINDOW_SIZE = 200;
+
+export interface WordMatch {
+  word: string;
+  start: number;
+  end: number;
+}
+
+// 返回覆盖 offset 的单词匹配（offset 落在 [start, end] 闭区间，与 hover 语义一致）。
+// 结果与全量 text.matchAll 等价，但只扫描 offset 前后 windowSize 个字符。
+export function findWordMatchAtOffset(
+  text: string,
+  offset: number,
+  pattern: RegExp,
+  windowSize: number = LOOKUP_WINDOW_SIZE
+): WordMatch | null {
+  const windowStart = Math.max(0, offset - windowSize);
+  const windowEnd = Math.min(text.length, offset + windowSize);
+  const matches = [...text.slice(windowStart, windowEnd).matchAll(pattern)];
+
+  for (const match of matches) {
+    const start = windowStart + (match.index ?? 0);
+    const end = start + match[0].length;
+    if (offset >= start && offset <= end) {
+      const word = match[0];
+      // 单个大写字母缩写/连字符碎片（≤3 字符）不作为查词目标。
+      if (/^[A-Z'-]+$/.test(word) && word.length <= 3) {
+        return null;
+      }
+      return { word, start, end };
+    }
+  }
+
+  return null;
+}
+
 // 稳定签名：用于判断同一单词的查词结果是否需要刷新弹窗。
 // 统一对 word 做小写归一，使 hover 路径与 OCR 路径签名语义一致。
 export function computeWordSignature(word: string, start: number, end: number, text: string): string {

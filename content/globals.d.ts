@@ -18,6 +18,7 @@ interface WordPickerShared {
   buildWordPattern: typeof import("../lib/content-helpers.js").buildWordPattern;
   extractSentence: typeof import("../lib/content-helpers.js").extractSentence;
   computeWordSignature: typeof import("../lib/content-helpers.js").computeWordSignature;
+  findWordMatchAtOffset: typeof import("../lib/content-helpers.js").findWordMatchAtOffset;
   isCjkChar: typeof import("../lib/content-helpers.js").isCjkChar;
   isHangulChar: typeof import("../lib/content-helpers.js").isHangulChar;
   LANG_LABELS: typeof import("../lib/content-helpers.js").LANG_LABELS;

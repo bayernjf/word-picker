@@ -32,6 +32,7 @@ function getFireworksAPI(): FireworksAPI {
     buildWordPattern,
     extractSentence,
     computeWordSignature,
+    findWordMatchAtOffset,
     isCjkChar: isCJKChar,
     isHangulChar: isHangulChar,
     LANG_LABELS,
@@ -759,29 +760,20 @@ function getFireworksAPI(): FireworksAPI {
       }
     }
 
-    const matches = [...text.matchAll(wordPattern)];
-
-    for (const match of matches) {
-      const start = match.index ?? 0;
-      const end = start + match[0].length;
-      if (offset >= start && offset <= end) {
-        const word = match[0];
-        if (/^[A-Z'-]+$/.test(word) && word.length <= 3) {
-          return null;
-        }
-
-        return {
-          word,
-          node: caret.node,
-          text,
-          start,
-          end,
-          offset,
-        };
-      }
+    // 只扫描 caret 附近的窗口，避免长文本节点每帧全量 matchAll（P2-8）。
+    const match = findWordMatchAtOffset(text, offset, wordPattern);
+    if (!match) {
+      return null;
     }
 
-    return null;
+    return {
+      word: match.word,
+      node: caret.node,
+      text,
+      start: match.start,
+      end: match.end,
+      offset,
+    };
   }
 
   interface CaretPosition {
