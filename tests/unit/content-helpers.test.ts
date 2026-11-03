@@ -7,6 +7,8 @@ import {
   buildWordPattern,
   extractSentence,
   computeWordSignature,
+  isCjkChar,
+  isHangulChar,
   LANG_LABELS,
   LANG_SHORT_LABELS,
 } from '../../lib/content-helpers.js';
@@ -222,5 +224,15 @@ describe('buildWordPattern — multi-language hover pickup', () => {
     expect([... 'Schön'.matchAll(buildWordPattern(['en', 'de']))].map((m) => m[0])).toEqual(['Schön']);
     expect(pickAtOffset('Le niño ist Schön', 6, ['en', 'fr', 'es', 'de'])).toBe('niño');
     expect(pickAtOffset('Le niño ist Schön', 15, ['en', 'fr', 'es', 'de'])).toBe('Schön');
+  });
+});
+
+describe('isCjkChar / isHangulChar', () => {
+  it('classifies CJK and Hangul characters and rejects latin', () => {
+    expect(isCjkChar('漢')).toBe(true);
+    expect(isCjkChar('あ')).toBe(true);
+    expect(isHangulChar('한')).toBe(true);
+    expect(isCjkChar('a')).toBe(false);
+    expect(isHangulChar('漢')).toBe(false);
   });
 });

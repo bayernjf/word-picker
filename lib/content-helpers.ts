@@ -39,6 +39,14 @@ export function normalizeLookupKeys(
 const CJK_REGEX = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]/;
 const HANGUL_REGEX = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/;
 
+export function isCjkChar(ch: string): boolean {
+  return CJK_REGEX.test(ch);
+}
+
+export function isHangulChar(ch: string): boolean {
+  return HANGUL_REGEX.test(ch);
+}
+
 export function detectWordLanguage(word: string): string {
   if (CJK_REGEX.test(word)) return "ja";
   if (HANGUL_REGEX.test(word)) return "ko";

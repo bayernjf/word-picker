@@ -11,6 +11,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { buildSync } from "esbuild";
 import { copyStaticAssets, copyPolyfill, copyTinySegmenter } from "./copy-static.js";
 import { buildTesseractAssets } from "./build-tesseract-assets.js";
 
@@ -150,6 +151,27 @@ function rewritePolyfillImports(distDir: string): void {
 
 const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".woff2", ".ttf", ".ico"]);
 const HTML_APP_URL_LOCAL = "http://localhost:3000/app";
+
+// content script 以 classic script 加载，不能带 ESM import。content/shared.ts
+// 复用 lib/content-helpers.ts 的查词实现（单一事实来源），因此需要在构建期
+// 把这些 import 打包成单文件 IIFE，覆盖 tsc 输出的同名 ESM 文件。
+function bundleContentShared(): void {
+  try {
+    buildSync({
+      entryPoints: [path.join(ROOT, "content", "shared.ts")],
+      outfile: path.join(SRC, "content", "shared.js"),
+      bundle: true,
+      format: "iife",
+      platform: "browser",
+      target: "es2022",
+      logLevel: "silent",
+    });
+  } catch (error) {
+    console.error("[build-cross-browser] Failed to bundle content/shared.ts:", error);
+    process.exit(1);
+  }
+  console.log("[build-cross-browser] content/shared.js bundled from lib/content-helpers");
+}
 
 function copyDirContents(src: string, dest: string): void {
   const entries = fs.readdirSync(src, { withFileTypes: true });
@@ -291,6 +313,9 @@ async function main(): Promise<void> {
 
   // Copy TinySegmenter for Japanese word segmentation
   copyTinySegmenter();
+
+  // Bundle content/shared.js (classic script) with the shared lib helpers
+  bundleContentShared();
 
   const target = process.argv[2] || "all";
 

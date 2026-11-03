@@ -1,3 +1,16 @@
+import {
+  DEFAULT_LOOKUP_KEY,
+  normalizeLookupKeys,
+  detectWordLanguage,
+  buildWordPattern,
+  extractSentence,
+  computeWordSignature,
+  isCjkChar,
+  isHangulChar,
+  LANG_LABELS,
+  LANG_SHORT_LABELS,
+} from "../lib/content-helpers.js";
+
 interface SendMessageResponse {
   success?: boolean;
   error?: string;
@@ -122,9 +135,21 @@ function createLogger(namespace: string): Logger {
     ]).finally(() => { if (timer !== undefined) clearTimeout(timer); });
   }
 
-  (window as unknown as { __WordPickerShared: { escapeHtml: (value: unknown) => string; sendMessage: (message: object, timeoutMs?: number) => Promise<SendMessageResponse>; createLogger: (namespace: string) => Logger } }).__WordPickerShared = {
+  (window as unknown as { __WordPickerShared: WordPickerShared }).__WordPickerShared = {
     escapeHtml,
     sendMessage,
     createLogger,
+    // 查词纯函数统一由 lib/content-helpers.ts 提供（单测覆盖的就是这份实现），
+    // 这里只做 classic script 的挂载，构建期由 esbuild 打包进本文件。
+    DEFAULT_LOOKUP_KEY,
+    normalizeLookupKeys,
+    detectWordLanguage,
+    buildWordPattern,
+    extractSentence,
+    computeWordSignature,
+    isCjkChar,
+    isHangulChar,
+    LANG_LABELS,
+    LANG_SHORT_LABELS,
   };
 })();
