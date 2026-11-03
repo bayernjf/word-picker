@@ -1239,13 +1239,13 @@ function getFireworksAPI(): FireworksAPI {
       existingDropdown.remove();
       return;
     }
-    const configuredLangs = settings.recognizeLanguages || ["en"];
+    const configuredLangs = (settings.recognizeLanguages || ["en"]).filter((code) => typeof code === "string" && /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(code));
     if (configuredLangs.length <= 1) return;
     const currentLang = langTag.getAttribute("data-current-lang") || "en";
     const dropdown = document.createElement("div");
     dropdown.className = "popup-lang-dropdown";
     dropdown.innerHTML = configuredLangs.map(code => {
-      const label = code.toUpperCase();
+      const label = escapeHtml(code.toUpperCase());
       const active = code === currentLang ? " active" : "";
       return `<div class="popup-lang-option${active}" data-lang="${escapeHtml(code)}">${label}</div>`;
     }).join("");
@@ -1319,8 +1319,8 @@ function getFireworksAPI(): FireworksAPI {
       ? `<div class="popup-sentence">上下文：${escapeHtml(data.sentence)}</div>`
       : "";
     const currentLang = currentLookup?.sourceLang || "en";
-    const langLabel = currentLang.toUpperCase();
-    const configuredLangs = settings.recognizeLanguages || ["en"];
+    const langLabel = escapeHtml(currentLang.toUpperCase());
+    const configuredLangs = (settings.recognizeLanguages || ["en"]).filter((code) => typeof code === "string" && /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(code));
     const langDropdownMarkup = configuredLangs.length > 1
       ? `<span class="popup-lang-wrap"><span class="popup-lang-tag" data-current-lang="${escapeHtml(currentLang)}">${langLabel} ▾</span></span>`
       : "";

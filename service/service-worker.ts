@@ -638,6 +638,13 @@ async function pullSettingsFromServer(): Promise<void> {
       patch[key] = result.settings[key];
     }
   }
+  // recognizeLanguages 会进入 content script 的 innerHTML：只接受合法语言码形态，防止被污染的
+  // 服务端 settings 把任意字符串注入页面。
+  if (Array.isArray(patch.recognizeLanguages)) {
+    patch.recognizeLanguages = patch.recognizeLanguages.filter(
+      (code): code is string => typeof code === 'string' && /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(code),
+    );
+  }
   if (Object.keys(patch).length > 0) {
     await saveSettings(patch as Partial<Settings>);
     logger.debug('[pullSettingsFromServer] merged', { keys: Object.keys(patch) });
