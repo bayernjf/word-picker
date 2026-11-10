@@ -123,6 +123,16 @@ WordPicker 是一款浏览器扩展，支持按住 Ctrl 悬停查词、一键收
 | `manifest.chrome.json` | Chrome 专用配置覆盖 |
 | `manifest.safari.json` | Safari 专用配置覆盖 |
 
+### 5.5 content script 的构建方式（esbuild IIFE 覆盖）
+
+`content/shared.ts` 直接 `import` `lib/content-helpers.ts`，把查词纯函数收敛到唯一实现（单测覆盖的就是这份，见 `docs/reviews/code-review-2026-11-02.md` 的 single-source 改造）。`tsconfig.extension.json` 继承的 `module: ESNext` 会把它编译成带顶层 `import` / `export` 的 ESM，但 manifest 的 `content_scripts.js` 是 classic script 加载（`manifest.base.json` 的 `content_scripts` 列表里有 `content/shared.js`，没有 `type: module`），classic script 不能带顶层 `import` / `export`。
+
+因此 `scripts/build-cross-browser.ts` 在 tsc 之后执行 `bundleContentShared()`：用 esbuild 的 `buildSync`（`format: "iife"`、`platform: "browser"`、`target: "es2022"`）把 `content/shared.ts` 连同它 import 的 `lib/content-helpers.ts` 打成单文件 IIFE，输出并覆盖 tsc 生成的同名文件 `dist/extension/content/shared.js`（`scripts/build-cross-browser.ts:155-173`，调用点在同文件 `:317`）。构建顺序必须是先 `build:ts` 再 `build-cross-browser`，现有 npm scripts 已保证这一点。
+
+esbuild 以 devDependency `^0.21.5` 引入（`package.json:33`，commit `27d7721`）。原因是仓库没有其他打包器，而 tsc 只能逐文件转译、无法把 ESM 合成 classic script；没有它，`content/shared.js` 在浏览器里无法执行。
+
+**不要移除这个覆盖步骤。** 移除后 tsc 产物会保留顶层 `import ... from "../lib/content-helpers.js"`，浏览器按 classic script 解析时直接抛 `SyntaxError: Cannot use import statement outside a module`；`content/shared.js` 不执行，`window.__WordPickerShared` 未定义，随后加载的 `content/content-script.js` 在启动阶段即失败，悬停查词整条链路不可用。
+
 ---
 
 ## 6. 扩展权限

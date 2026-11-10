@@ -16,6 +16,8 @@ import {
   Settings,
 } from '../lib/storage.js';
 import { translateWord } from '../lib/translator.js';
+import { mergeWordsLastWriteWins } from '../lib/merge-words.js';
+import { toAnki } from '../lib/anki.js';
 import { ensureDictImported, lookupOffline } from '../lib/offlineDict.js';
 import { getCachedTranslation, setCachedTranslation } from '../lib/cache.js';
 import {
@@ -81,6 +83,8 @@ self.addEventListener('error', (event) => {
 const STORAGE_DEVICE_ID = 'deviceId';
 const STORAGE_SYNC_QUEUE = 'syncQueue';
 const STORAGE_DELETE_QUEUE = 'deleteQueue';
+const STORAGE_SYNC_DEAD_LETTER = 'syncDeadLetterQueue';
+const SYNC_DEAD_LETTER_CAP = 100;
 const STORAGE_AUTH = 'authData';
 const STORAGE_SYNC_LOCK = 'syncLock';
 const STORAGE_SYNC_FAILURE = 'syncFailure';
@@ -401,14 +405,11 @@ async function handleSaveWord(entry: Partial<Word> & { word: string; translation
   const auth = await getAuthData();
   const settings = await getSettings();
 
-  // 检查是否启用了同步且已登录
-  const syncEnabled = settings.syncEnabled !== false;
+  // 检查是否已登录（同步仅与登录态相关，本地保存不强制）
   const isLoggedIn = Boolean(auth?.accessToken && auth?.refreshToken);
 
-  // 如果启用了同步但未登录，提示用户
-  if (syncEnabled && !isLoggedIn) {
-    throw new Error('请先登录才能添加单词');
-  }
+  // 未登录允许本地保存（P1-2 修复）：同步仅与登录态相关，本地单词本不强制登录。
+  // 登录后首次保存仍会经下方 syncForRead 拉取远端单词本并推送本地积压。
 
   // 仅当本地尚无任何单词本时，才同步拉取一次（首次冷启动需要拿到同步单词本 ID）。
   // 之后的保存不再被「保存前全量拉取」阻塞，避免每次添加都等一次网络往返。
@@ -571,25 +572,6 @@ function csvEscape(value: unknown): string {
   return `"${text}"`;
 }
 
-function toAnki(words: Word[]): string {
-  return words.map((word) => {
-    const front = word.word;
-    const phonetic = word.phonetic || word._legacy?.phonetic || '';
-    const meaning = word.translation || word._legacy?.meaning || '';
-    const exampleEn = word.exampleEn || word._legacy?.exampleEn || '';
-    const exampleZh = word.exampleZh || word._legacy?.exampleZh || '';
-    const contexts = (word.contexts || []).map((c) => c.context).filter(Boolean).join('<br>');
-    const back = [
-      phonetic ? `<i>${phonetic}</i>` : '',
-      meaning ? `<div>${meaning}</div>` : '',
-      exampleEn ? `<div class="example">${exampleEn}</div>` : '',
-      exampleZh ? `<div class="example">${exampleZh}</div>` : '',
-      contexts ? `<div class="contexts">${contexts}</div>` : '',
-    ].filter(Boolean).join('');
-    return `${front}\t${back}`;
-  }).join('\n');
-}
-
 async function handleSyncNow(): Promise<FlushResult> {
   await pushSettingsToServer().catch(() => {});
   await pullSettingsFromServer().catch(() => {});
@@ -640,6 +622,13 @@ async function pullSettingsFromServer(): Promise<void> {
     if (key in result.settings) {
       patch[key] = result.settings[key];
     }
+  }
+  // recognizeLanguages 会进入 content script 的 innerHTML：只接受合法语言码形态，防止被污染的
+  // 服务端 settings 把任意字符串注入页面。
+  if (Array.isArray(patch.recognizeLanguages)) {
+    patch.recognizeLanguages = patch.recognizeLanguages.filter(
+      (code): code is string => typeof code === 'string' && /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(code),
+    );
   }
   if (Object.keys(patch).length > 0) {
     await saveSettings(patch as Partial<Settings>);
@@ -782,6 +771,15 @@ async function setSyncQueue(queue: SyncQueueEntry[]): Promise<SyncQueueEntry[]> 
   return setQueue(STORAGE_SYNC_QUEUE, queue);
 }
 
+/** 同步冲突条目移入死信队列（封顶 100 条），避免反复重试毒化主队列。 */
+async function appendSyncDeadLetters(entries: SyncQueueEntry[]): Promise<number> {
+  if (entries.length === 0) return 0;
+  const existing = await getQueue<SyncQueueEntry>(STORAGE_SYNC_DEAD_LETTER);
+  const next = [...existing, ...entries].slice(-SYNC_DEAD_LETTER_CAP);
+  await setQueue(STORAGE_SYNC_DEAD_LETTER, next);
+  return next.length;
+}
+
 async function getDeleteQueue(): Promise<string[]> {
   return getQueue(STORAGE_DELETE_QUEUE);
 }
@@ -900,12 +898,18 @@ async function pullChanges(auth: AuthData): Promise<void> {
   }
 
   const localBooks = books.map(mapServerBookToLocal);
-  const localWords = words.map(mapServerWordToLocal);
+  const serverWords = words.map(mapServerWordToLocal);
   const pendingWords = await getSyncQueue();
   const pendingKeys = new Set(pendingWords.map(getQueuedWordKey));
+  // 单词级 last-write-wins 合并：本地独有或本地较新的词条不被服务端快照吞掉
+  //（此前本地未入队/被队列上限截断的改动会在下次 pull 被静默覆盖）。
+  const mergeKey = (w: { word?: string; bookId?: string }) =>
+    `${normalizeWordValue(w.word)}::${normalizeBookValue(w.bookId ?? '')}`;
+  const currentLocal = await getWords();
+  const mergedBase = mergeWordsLastWriteWins(serverWords, currentLocal, mergeKey, (winner) => winner);
   const mergedWords = [
     ...pendingWords,
-    ...localWords.filter((word) => !pendingKeys.has(getQueuedWordKey(word))),
+    ...mergedBase.filter((word) => !pendingKeys.has(getQueuedWordKey(word))),
   ];
   await saveBooks(localBooks);
   await saveWords(mergedWords);
@@ -1090,7 +1094,20 @@ async function pushWords(auth: AuthData): Promise<{ ok: boolean; processed: numb
     logger.info(`[pushWords] 同步完成，清除 ${syncedQueueRevisions.size} 条，队列剩余 ${(await getSyncQueue()).length} 条`);
   }
   if (conflictSet.size > 0) {
-    throw new Error('sync_conflict');
+    // 冲突条目移出主队列进死信：此前它们永不出队，每次 flush 都重推重冲突，
+    // 退避被拉长且拖累后续正常词条。死信条目保留在本地存储供排查/人工处理。
+    const conflictRevisions = new Set(
+      [...payloadByKey.entries()]
+        .filter(([, entry]) => conflictSet.has(normalizeWordValue(entry.payload.word)))
+        .flatMap(([, entry]) => [...entry.queueRevisions])
+    );
+    await runQueueMutation(async () => {
+      const currentQueue = await getSyncQueue();
+      const dead = currentQueue.filter((item) => conflictRevisions.has(getQueueRevision(item)));
+      await setSyncQueue(currentQueue.filter((item) => !conflictRevisions.has(getQueueRevision(item))));
+      const deadCount = await appendSyncDeadLetters(dead);
+      logger.warn('[pushWords] 冲突条目已隔离到死信队列', { conflicts: dead.length, deadTotal: deadCount });
+    });
   }
 
   return { ok: true, processed: payload.length, queueSize: (await getSyncQueue()).length };
@@ -1542,11 +1559,12 @@ interface AuthStatusResult {
 
 async function handleAuthStatus(): Promise<AuthStatusResult> {
   const auth = await getAuthData();
-  // 登录态已过期：清除并视为未登录
+  // 登录态已过期：只清认证态并视为未登录（P1-1 修复）。
+  // 本地单词/单词本/同步队列一律保留——过期不是登出，重新登录后按既有
+  // 用户切换逻辑处理，未推送的积压随下次 flushSyncQueue 续传。
   if (auth && isAuthExpired(auth)) {
     await setAuthData(null);
     await setCurrentUserEmail(null);
-    await clearUserData();
     return { ok: true, isLoggedIn: false, user: null };
   }
   return {

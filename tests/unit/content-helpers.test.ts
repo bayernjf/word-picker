@@ -7,9 +7,27 @@ import {
   buildWordPattern,
   extractSentence,
   computeWordSignature,
+  findWordMatchAtOffset,
+  isCjkChar,
+  isHangulChar,
+  LOOKUP_WINDOW_SIZE,
   LANG_LABELS,
   LANG_SHORT_LABELS,
 } from '../../lib/content-helpers.js';
+
+// 全量扫描的参考实现（修复前 content-script 的真实行为），用于证明窗口化结果等价。
+function fullScanAtOffset(text: string, offset: number, pattern: RegExp) {
+  for (const match of text.matchAll(pattern)) {
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    if (offset >= start && offset <= end) {
+      const word = match[0];
+      if (/^[A-Z'-]+$/.test(word) && word.length <= 3) return null;
+      return { word, start, end };
+    }
+  }
+  return null;
+}
 
 describe('normalizeLookupKeys', () => {
   it('returns default when input is null/undefined', () => {
@@ -222,5 +240,55 @@ describe('buildWordPattern — multi-language hover pickup', () => {
     expect([... 'Schön'.matchAll(buildWordPattern(['en', 'de']))].map((m) => m[0])).toEqual(['Schön']);
     expect(pickAtOffset('Le niño ist Schön', 6, ['en', 'fr', 'es', 'de'])).toBe('niño');
     expect(pickAtOffset('Le niño ist Schön', 15, ['en', 'fr', 'es', 'de'])).toBe('Schön');
+  });
+});
+
+describe('findWordMatchAtOffset', () => {
+  const pattern = buildWordPattern(['en', 'fr', 'es', 'de']);
+
+  it('returns the same match as a full scan for every offset in a long text', () => {
+    // 构造远超窗口长度的文本，覆盖窗口边界、词中间、词尾、非字母位置。
+    const unit = 'the quick brown fox jumps über niño Schön lazy dog. ';
+    let text = '';
+    while (text.length < LOOKUP_WINDOW_SIZE * 12) text += unit;
+    const length = text.length;
+
+    for (let offset = 0; offset <= length; offset += 1) {
+      expect(findWordMatchAtOffset(text, offset, pattern), `offset=${offset}`).toEqual(
+        fullScanAtOffset(text, offset, pattern)
+      );
+    }
+  });
+
+  it('still finds a maximum-length word (44 chars) whose end sits at the caret', () => {
+    // 单词模式最长 45 个字符，窗口必须比它宽，否则会把词切断。
+    const word = 'a'.repeat(44);
+    const text = `${'x'.repeat(LOOKUP_WINDOW_SIZE)} ${word}`;
+    const start = LOOKUP_WINDOW_SIZE + 1;
+    expect(findWordMatchAtOffset(text, text.length - 1, pattern)).toEqual({
+      word,
+      start,
+      end: start + word.length,
+    });
+  });
+
+  it('keeps the ≤3 uppercase-fragment rejection', () => {
+    const text = 'THE end';
+    expect(findWordMatchAtOffset(text, 0, pattern)).toBeNull();
+  });
+
+  it('returns null when the offset lands between words', () => {
+    const text = 'one  two';
+    expect(findWordMatchAtOffset(text, 4, pattern)).toBeNull();
+  });
+});
+
+describe('isCjkChar / isHangulChar', () => {
+  it('classifies CJK and Hangul characters and rejects latin', () => {
+    expect(isCjkChar('漢')).toBe(true);
+    expect(isCjkChar('あ')).toBe(true);
+    expect(isHangulChar('한')).toBe(true);
+    expect(isCjkChar('a')).toBe(false);
+    expect(isHangulChar('漢')).toBe(false);
   });
 });

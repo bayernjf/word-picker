@@ -1,8 +1,10 @@
 interface SharedAPI {
   escapeHtml: (value: unknown) => string;
-  sendMessage: (message: object, timeoutMs?: number) => Promise<{ success?: boolean; error?: string; [key: string]: unknown }>;
+  sendMessage: (message: object, timeoutMs?: number) => Promise<SendMessageResponse>;
   createLogger: (namespace: string) => { debug: (...args: unknown[]) => void; info: (...args: unknown[]) => void; warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
 }
+
+type SendMessageResponse = { success?: boolean; error?: string; [key: string]: unknown };
 
 interface FireworksAPI {
   launchFireworks: (effectMode: string, x: number, y: number) => void;
@@ -19,7 +21,24 @@ function getFireworksAPI(): FireworksAPI {
   }
   (window as unknown as { __WordPickerContentLoaded?: boolean }).__WordPickerContentLoaded = true;
 
-  const { escapeHtml, sendMessage, createLogger } = (window as unknown as { __WordPickerShared: SharedAPI }).__WordPickerShared;
+  const shared = (window as unknown as { __WordPickerShared: SharedAPI & WordPickerShared }).__WordPickerShared;
+  const { escapeHtml, sendMessage, createLogger } = shared;
+
+  // 查词纯函数只有 lib/content-helpers.ts 一份实现（含单测），
+  // 由 content/shared.js 在构建期打包后挂到 window 上，避免再次出现本地副本漂移。
+  const {
+    normalizeLookupKeys,
+    detectWordLanguage,
+    buildWordPattern,
+    extractSentence,
+    computeWordSignature,
+    findWordMatchAtOffset,
+    isCjkChar: isCJKChar,
+    isHangulChar: isHangulChar,
+    LANG_LABELS,
+    LANG_SHORT_LABELS,
+  } = shared;
+
   const _logger = createLogger("content-script");
 
   const STATE = {
@@ -54,78 +73,12 @@ function getFireworksAPI(): FireworksAPI {
     win: LookupKey;
   }
 
-  const DEFAULT_LOOKUP_KEY: LookupKey = "Control";
+  const DEFAULT_LOOKUP_KEY: LookupKey = shared.DEFAULT_LOOKUP_KEY;
 
   // 图片识别（OCR）功能总开关。当前为临时隐藏状态：基础实现已完成，
   // 但因真实网页实测（跨域/动态图片/识别精度）尚未充分验证，先关闭用户入口。
   // 设为 true 即可恢复悬停图片取词，后端 IMAGE_OCR 处理器与 offscreen 代码保持可用。
   const IMAGE_OCR_ENABLED = false;
-
-  const LANGUAGE_WORD_PATTERNS: Record<string, string> = {
-    en: "[A-Za-z][A-Za-z'-]{1,44}",
-    fr: "[A-Za-z\u00C0-\u00FF][A-Za-z\u00C0-\u00FF'-]{1,44}",
-    es: "[A-Za-z\u00C0-\u00FF\u00D1\u00F1][A-Za-z\u00C0-\u00FF\u00D1\u00F1'-]{1,44}",
-    de: "[A-Za-z\u00C0-\u00F6\u00F8-\u00FF][A-Za-z\u00C0-\u00F6\u00F8-\u00FF'-]{1,44}",
-    ko: "[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]+",
-    ja: "[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]",
-  };
-
-  const FRENCH_FEATURE_CHARS = /[\u00E0\u00E2\u00E7\u00E8\u00E9\u00EA\u00EB\u00EE\u00EF\u00F4\u00F9\u00FB\u00FC\u0153]/;
-  const SPANISH_FEATURE_CHARS = /[\u00F1\u00A1\u00BF]/;
-  const GERMAN_FEATURE_CHARS = /[\u00C4\u00D6\u00DC\u00E4\u00F6\u00FC\u00DF\u1E9E]/;
-
-  function normalizeLookupKeys(raw: Record<string, unknown>): PerPlatformLookupKeys {
-    if (raw.lookupKey !== undefined && !raw.lookupKeys) {
-      const oldKey = raw.lookupKey as LookupKey;
-      raw.lookupKeys = { mac: oldKey, win: oldKey };
-      delete raw.lookupKey;
-    }
-    if (!raw.lookupKeys || typeof raw.lookupKeys !== "object") {
-      return { mac: DEFAULT_LOOKUP_KEY, win: DEFAULT_LOOKUP_KEY };
-    }
-    const keys = raw.lookupKeys as Partial<PerPlatformLookupKeys>;
-    return { mac: keys.mac || DEFAULT_LOOKUP_KEY, win: keys.win || DEFAULT_LOOKUP_KEY };
-  }
-
-  function detectWordLanguage(word: string): string {
-    if (CJK_REGEX.test(word)) return "ja";
-    if (HANGUL_REGEX.test(word)) return "ko";
-    if (GERMAN_FEATURE_CHARS.test(word)) return "de";
-    if (SPANISH_FEATURE_CHARS.test(word)) return "es";
-    if (FRENCH_FEATURE_CHARS.test(word)) return "fr";
-    return "en";
-  }
-
-  function buildWordPattern(languages: string[]): RegExp {
-    // Put "en" last so accented-language patterns (supersets of the ASCII-only en
-    // pattern) match a whole word including diacritics instead of fragmenting it.
-    const ordered = [
-      ...languages.filter((l) => l !== "en"),
-      ...(languages.includes("en") ? ["en"] : []),
-    ];
-    const patterns = ordered.map((lang) => LANGUAGE_WORD_PATTERNS[lang]).filter(Boolean);
-    const combined = patterns.length > 0 ? patterns.join("|") : LANGUAGE_WORD_PATTERNS.en;
-    return new RegExp(combined, "g");
-  }
-
-  function extractSentence(text: string, word: string): string {
-    const idx = text.indexOf(word);
-    if (idx < 0) return text.slice(0, 120);
-    const start = Math.max(0, idx - 40);
-    const end = Math.min(text.length, idx + 80);
-    return text.slice(start, end);
-  }
-
-  function computeWordSignature(word: string, start: number, end: number, text: string): string {
-    return `${word.toLowerCase()}|${start}|${end}|${text}`;
-  }
-
-  const LANG_LABELS: Record<string, string> = {
-    en: "英语", fr: "法语", es: "西班牙语", de: "德语", ko: "韩语", ja: "日语",
-  };
-  const LANG_SHORT_LABELS: Record<string, string> = {
-    en: "[英]", fr: "[法]", es: "[西]", de: "[德]", ko: "[한]", ja: "[日]",
-  };
 
   const currentPlatform = detectPlatform();
 
@@ -148,8 +101,6 @@ function getFireworksAPI(): FireworksAPI {
     recognizeLanguages: ["en"],
   };
 
-  const CJK_REGEX = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FFF\u3400-\u4DBF]/;
-  const HANGUL_REGEX = /[\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F]/;
   const CJK_PUNCT_REGEX = /^[\u3000-\u303F\uFF00-\uFFEF\s]+$/;
 
   interface TinySegmenter {
@@ -164,14 +115,6 @@ function getFireworksAPI(): FireworksAPI {
       return segmenterInstance;
     }
     return null;
-  }
-
-  function isCJKChar(ch: string): boolean {
-    return CJK_REGEX.test(ch);
-  }
-
-  function isHangulChar(ch: string): boolean {
-    return HANGUL_REGEX.test(ch);
   }
 
   function getActiveLookupKey(): LookupKey {
@@ -817,29 +760,20 @@ function getFireworksAPI(): FireworksAPI {
       }
     }
 
-    const matches = [...text.matchAll(wordPattern)];
-
-    for (const match of matches) {
-      const start = match.index ?? 0;
-      const end = start + match[0].length;
-      if (offset >= start && offset <= end) {
-        const word = match[0];
-        if (/^[A-Z'-]+$/.test(word) && word.length <= 3) {
-          return null;
-        }
-
-        return {
-          word,
-          node: caret.node,
-          text,
-          start,
-          end,
-          offset,
-        };
-      }
+    // 只扫描 caret 附近的窗口，避免长文本节点每帧全量 matchAll（P2-8）。
+    const match = findWordMatchAtOffset(text, offset, wordPattern);
+    if (!match) {
+      return null;
     }
 
-    return null;
+    return {
+      word: match.word,
+      node: caret.node,
+      text,
+      start: match.start,
+      end: match.end,
+      offset,
+    };
   }
 
   interface CaretPosition {
@@ -1239,13 +1173,13 @@ function getFireworksAPI(): FireworksAPI {
       existingDropdown.remove();
       return;
     }
-    const configuredLangs = settings.recognizeLanguages || ["en"];
+    const configuredLangs = (settings.recognizeLanguages || ["en"]).filter((code) => typeof code === "string" && /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(code));
     if (configuredLangs.length <= 1) return;
     const currentLang = langTag.getAttribute("data-current-lang") || "en";
     const dropdown = document.createElement("div");
     dropdown.className = "popup-lang-dropdown";
     dropdown.innerHTML = configuredLangs.map(code => {
-      const label = code.toUpperCase();
+      const label = escapeHtml(code.toUpperCase());
       const active = code === currentLang ? " active" : "";
       return `<div class="popup-lang-option${active}" data-lang="${escapeHtml(code)}">${label}</div>`;
     }).join("");
@@ -1319,8 +1253,8 @@ function getFireworksAPI(): FireworksAPI {
       ? `<div class="popup-sentence">上下文：${escapeHtml(data.sentence)}</div>`
       : "";
     const currentLang = currentLookup?.sourceLang || "en";
-    const langLabel = currentLang.toUpperCase();
-    const configuredLangs = settings.recognizeLanguages || ["en"];
+    const langLabel = escapeHtml(currentLang.toUpperCase());
+    const configuredLangs = (settings.recognizeLanguages || ["en"]).filter((code) => typeof code === "string" && /^[a-z]{2,3}(-[a-z0-9]{2,8})*$/i.test(code));
     const langDropdownMarkup = configuredLangs.length > 1
       ? `<span class="popup-lang-wrap"><span class="popup-lang-tag" data-current-lang="${escapeHtml(currentLang)}">${langLabel} ▾</span></span>`
       : "";
