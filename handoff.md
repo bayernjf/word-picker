@@ -2,6 +2,18 @@
 
 > Last updated: 2026-08-05 (Image OCR temporarily hidden via IMAGE_OCR_ENABLED flag)
 
+## 待办登记（标准）
+
+> 本段是本产品唯一活跃待办入口；详细背景见下方原有章节。
+> 最近同步：2026-08-05
+
+<!-- tier:todos v1 -->
+| id | title | status | priority | owner | next | evidence | updated |
+|---|---|---|---|---|---|---|---|
+| WP-01 | push `feature/20260602` 的 effects commits | open | p1 | owner | 完成 `ensureOffscreenDocument` 修复后 push 并合并 | `handoff.md` Current Branch Status | 2026-08-05 |
+| WP-02 | Image OCR 重新启用评估 | open | p2 | self | 完成 service worker 修复后评估恢复 `IMAGE_OCR_ENABLED` | `handoff.md` 头部 | 2026-08-05 |
+<!-- /tier:todos -->
+
 ## Project Overview
 
 WordPicker is a cross-browser (Chrome/Edge/Safari) English word-picking extension: hold a modifier key + hover to look up words, save to WordBase cloud wordbook with one click, supports SRS review, AI definitions, and fireworks effects.
